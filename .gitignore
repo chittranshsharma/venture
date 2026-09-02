@@ -11,6 +11,7 @@ recruiter_contacts.csv
 backups/
 bot_logs.txt
 edge-debug-profile/
+venture_phase_plan.md
 
 # Media, Screenshots & Generated Files
 screenshots/
@@ -28,3 +29,14 @@ bin/
 lib/
 include/
 /lib64/
+
+# Testing & cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS and Editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
