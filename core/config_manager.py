@@ -1,0 +1,215 @@
+import os
+import json
+import urllib.parse
+import copy
+from core.credential_store import get_credential, migrate_plaintext_credentials
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+SCREENSHOTS_DIR = os.path.join(BASE_DIR, "screenshots")
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+
+LOCATION_DATA = {
+    "India": {
+        "All States": ["All Cities"],
+        "Karnataka": ["All Cities", "Bangalore", "Mysore", "Hubli", "Mangalore"],
+        "Maharashtra": ["All Cities", "Mumbai", "Pune", "Nagpur", "Thane", "Navi Mumbai"],
+        "Tamil Nadu": ["All Cities", "Chennai", "Coimbatore", "Madurai", "Trichy"],
+        "Delhi NCR": ["All Cities", "Delhi", "New Delhi", "Noida", "Gurgaon"],
+        "Telangana": ["All Cities", "Hyderabad", "Warangal", "Secunderabad"],
+        "Gujarat": ["All Cities", "Ahmedabad", "Surat", "Vadodara", "Rajkot"]
+    },
+    "United States": {
+        "All States": ["All Cities"],
+        "California": ["All Cities", "San Francisco", "Los Angeles", "San Jose", "San Diego"],
+        "New York": ["All Cities", "New York City", "Buffalo", "Rochester"],
+        "Texas": ["All Cities", "Austin", "Houston", "Dallas", "San Antonio"],
+        "Washington": ["All Cities", "Seattle", "Bellevue", "Spokane"]
+    }
+}
+
+DEFAULT_CONFIG = {
+    "candidate": {
+        "name": "Your Full Name",
+        "email": "your.email@example.com",
+        "phone": "9999999999",
+        "country_code": "+91",
+        "linkedin": "https://www.linkedin.com/in/your-profile",
+        "github": "https://github.com/your-username",
+        "portfolio": "https://yourportfolio.com",
+        "resume_path": "",
+        "skills": ["React", "Node.js", "Python", "JavaScript", "Git"],
+        "qa_vault": {
+            "experience_years": "1",
+            "notice_period": "Immediate",
+            "current_ctc": "0",
+            "expected_ctc": "0",
+            "work_authorization": "Yes",
+            "require_sponsorship": "No",
+            "willing_to_relocate": "Yes",
+            "gender": "Decline to state"
+        }
+    },
+    "settings": {
+        "queries": ["Full Stack Developer", "Software Engineer", "Frontend Developer"],
+        "min_score": 70,
+        "skip_keywords": ["c++", "ruby", "COBOL"],
+        "max_jobs_per_query": 10,
+        "experience_level": "All",
+        "job_type": "All",
+        "location_type": "All",
+        "location_scope": "Entire Country",
+        "preferred_locations": ["Mumbai, Maharashtra, India", "Bangalore, Karnataka, India"],
+        "target_platforms": ["Indeed", "Naukri", "LinkedIn"],
+        "ollama_model": "qwen2.5:7b",
+        "ai_provider": "local",
+        "cloud_ai_preset": "OpenAI",
+        "cloud_ai_base_url": "https://api.openai.com/v1",
+        "cloud_ai_model": "gpt-4o-mini",
+        "cloud_ai_auth_type": "api_key",
+        "cloud_ai_api_key": "",
+        "cloud_ai_username": "",
+        "cloud_ai_password": "",
+        "safe_mode": True,
+        "daily_apply_cap": 25,
+        "min_delay_seconds": 15,
+        "max_delay_seconds": 45
+    },
+    "accounts": {
+        "indeed_email": "",
+        "indeed_pass": "",
+        "naukri_email": "",
+        "naukri_pass": "",
+        "linkedin_email": "",
+        "linkedin_pass": ""
+    },
+    "smtp": {
+        "server": "",
+        "port": "",
+        "email": "",
+        "password": ""
+    }
+}
+
+CONFIG = {}
+
+def load_config():
+    global CONFIG
+    if not os.path.exists(CONFIG_PATH):
+        CONFIG = copy.deepcopy(DEFAULT_CONFIG)
+        save_config()
+    else:
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                CONFIG = json.load(f)
+                # Fill missing keys dynamically
+                for category in ["candidate", "settings", "accounts", "smtp"]:
+                    if category not in CONFIG:
+                        CONFIG[category] = DEFAULT_CONFIG[category]
+                    else:
+                        for k, v in DEFAULT_CONFIG[category].items():
+                            if k not in CONFIG[category]:
+                                CONFIG[category][k] = v
+        except Exception:
+            CONFIG = copy.deepcopy(DEFAULT_CONFIG)
+            save_config()
+    # Migrate any plaintext credentials to secure storage
+    if migrate_plaintext_credentials(CONFIG):
+        save_config()  # Save config with blanked-out passwords
+    return CONFIG
+
+def save_config():
+    try:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(CONFIG, f, indent=4)
+    except Exception as e:
+        print(f"Error saving config: {e}")
+
+def get_model_name():
+    """Get the configured Ollama model name, with fallback."""
+    return CONFIG.get("settings", {}).get("ollama_model", "qwen2.5:7b")
+
+def get_location_search_term(chip_text):
+    parts = [p.strip() for p in chip_text.split(",") if p.strip()]
+    if len(parts) == 3:
+        city, state, country = parts[0], parts[1], parts[2]
+        if city != "All Cities":
+            return city
+        elif state != "All States":
+            return state
+        else:
+            return country
+    return chip_text
+
+def encode_query_for_url(query, platform="naukri"):
+    """Safely encode search queries for platform-specific URLs."""
+    if platform == "naukri":
+        # Naukri uses dashed-lowercase slugs in URLs
+        safe_q = query.strip().lower()
+        safe_q = safe_q.replace("+", "plus").replace("#", "sharp").replace(".", "-dot-")
+        safe_q = safe_q.replace(" ", "-")
+        # Remove remaining unsafe URL chars
+        safe_q = urllib.parse.quote(safe_q, safe="-")
+        return safe_q
+    elif platform == "indeed":
+        return query.replace(" ", "+")
+    elif platform == "linkedin":
+        return urllib.parse.quote(query, safe="")
+    return query
+
+def get_installed_ollama_models():
+    """Fetch list of installed models from local Ollama API."""
+    import urllib.request
+    try:
+        response = urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5)
+        data = json.loads(response.read().decode('utf-8'))
+        return [m['name'] for m in data.get("models", [])]
+    except Exception:
+        return []
+
+def get_ai_provider():
+    return CONFIG.get("settings", {}).get("ai_provider", "local")
+
+def get_cloud_ai_config():
+    s = CONFIG.get("settings", {})
+    return {
+        "preset": s.get("cloud_ai_preset", "OpenAI"),
+        "base_url": s.get("cloud_ai_base_url", "https://api.openai.com/v1").strip(),
+        "model": s.get("cloud_ai_model", "gpt-4o-mini").strip(),
+        "auth_type": s.get("cloud_ai_auth_type", "api_key"),
+        "api_key": get_credential("settings.cloud_ai_api_key", s.get("cloud_ai_api_key", "")).strip(),
+        "username": get_credential("settings.cloud_ai_username", s.get("cloud_ai_username", "")).strip(),
+        "password": get_credential("settings.cloud_ai_password", s.get("cloud_ai_password", "")).strip()
+    }
+
+def get_active_model_display():
+    provider = get_ai_provider()
+    if provider == "cloud":
+        cfg = get_cloud_ai_config()
+        m_name = cfg["model"] or cfg["preset"]
+        return f"☁️ Cloud AI ({m_name})"
+    else:
+        l_model = get_model_name()
+        return f"🤖 Local ({l_model})"
+
+# Initial load
+load_config()
+
+# P1.3 — Load platform CSS selectors from selectors.yaml (no hard-crash if missing)
+def load_selectors() -> dict:
+    """Load selectors.yaml from project root. Returns empty dict if file or pyyaml missing."""
+    path = os.path.join(BASE_DIR, "selectors.yaml")
+    if not os.path.exists(path):
+        return {}
+    try:
+        import yaml
+        with open(path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f) or {}
+    except ImportError:
+        print("[VENTURE] pyyaml not installed — selectors.yaml ignored. Run: pip install pyyaml")
+        return {}
+    except Exception as e:
+        print(f"[VENTURE] Could not load selectors.yaml: {e}")
+        return {}
+
+SELECTORS = load_selectors()
