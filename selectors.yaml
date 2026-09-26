@@ -1,0 +1,67 @@
+# VENTURE — Platform Selector Configuration
+# Edit this file to fix broken selectors without touching Python code.
+# Each platform key maps field names to an ordered list of CSS selectors.
+# The bot tries each in order and uses the first one that matches.
+
+indeed:
+  job_card:
+    - "div[data-jk]"
+    - ".jobCard_mainContent"
+    - ".job_seen_beacon"
+    - ".tapItem"
+  apply_button:
+    - "button[data-testid='indeedApply']"
+    - "span[id^='indeedApply']"
+    - "button.ia-IndeedApplyButton"
+    - "a[data-indeed-apply-jobid]"
+  resume_upload:
+    - "input[type='file']"
+  cover_letter:
+    - "textarea[name='cover_letter']"
+    - "textarea[id*='cover']"
+    - "textarea[placeholder*='cover']"
+  submit:
+    - "button[type='submit']"
+    - "button:has-text('Submit Application')"
+    - "button:has-text('Submit')"
+    - "input[type='submit']"
+
+naukri:
+  job_card:
+    - "article.jobTuple"
+    - ".cust-job-tuple"
+    - ".job-listing"
+    - "article[data-job-id]"
+  apply_button:
+    - "button.apply-button"
+    - "button[id='apply-button']"
+    - "a.btn-medium:has-text('Apply')"
+    - "a.apply-btn"
+    - "button:has-text('Apply')"
+  resume_upload:
+    - "input[type='file']"
+  submit:
+    - "button:has-text('Apply')"
+    - "button[type='submit']"
+    - "button.btn-primary:has-text('Apply')"
+
+linkedin:
+  easy_apply_button:
+    - "button.jobs-apply-button"
+    - "button[aria-label='Easy Apply']"
+    - "button:has-text('Easy Apply')"
+    - ".jobs-apply-button"
+  next_button:
+    - "button[aria-label='Continue to next step']"
+    - "button:has-text('Next')"
+    - "button.artdeco-button--primary:has-text('Next')"
+  submit:
+    - "button[aria-label='Submit application']"
+    - "button:has-text('Submit application')"
+    - "button:has-text('Submit')"
+  resume_upload:
+    - "input[type='file']"
+  job_card:
+    - ".job-card-container"
+    - "li.jobs-search-results__list-item"
+    - ".job-card-list__entity-lockup"
