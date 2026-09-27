@@ -29,6 +29,8 @@ async def check_safety_limit():
     
     if safe_mode and applied_today >= daily_cap:
         log_message(f"🛡️ SAFETY LIMIT REACHED: Reached daily application cap ({applied_today}/{daily_cap}). Pausing bot to protect your platform account.")
+        from core.notifier import notify
+        notify("JobPilot — Limit Reached", f"Daily cap of {daily_cap} applications hit")
         state.BOT_PAUSED = True
         return True
     return False
@@ -299,6 +301,9 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
             transition(href, JobState.QUALIFIED)
         except Exception:
             pass
+        if score >= 85:
+            from core.notifier import notify
+            notify("JobPilot — Strong Match", f"{title} at {company} ({score}%)")
         if should_approve:
             log_message(f"DOUBT DETECTED ({score}%): Queueing '{title}' at '{company}' in Approvals.")
             with state.DOUBT_LOCK:
@@ -342,6 +347,8 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     log_message(f"Auto-fill error: {e}")
                 await wait_for_manual_submission(desc_page, has_doubts=has_doubts)
                 save_to_db(href, title, company, "Indeed", "Applied")
+                from core.notifier import notify
+                notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
             elif await external_apply.count() > 0:
                 career_url = await external_apply.first.get_attribute("href")
                 log_message(f"External Career Page detected for {title} at {company}: {career_url}")
@@ -355,6 +362,8 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     if applied:
                         save_to_db(href, title, company, "Indeed", "Applied", f"Applied via ATS ({ext_page.url})")
                         log_message(f"Indeed: Applied to external ATS ({ext_page.url})")
+                        from core.notifier import notify
+                        notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
                     else:
                         save_to_db(href, title, company, "Indeed", "Suggested", f"Career Page: {career_url}")
                     await ext_page.close()
@@ -387,6 +396,8 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     if applied:
                         save_to_db(href, title, company, "Naukri", "Applied", f"Applied via ATS ({redirect_url})")
                         log_message(f"Naukri: Applied to external ATS ({redirect_url})")
+                        from core.notifier import notify
+                        notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
                     else:
                         save_to_db(href, title, company, "Naukri", "Suggested", f"Career Page: {redirect_url}")
                     await new_tab.close()
@@ -412,6 +423,8 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                                 log_message(f"Auto-fill error: {e}")
                             await wait_for_manual_submission(desc_page, has_doubts=has_doubts)
                             save_to_db(href, title, company, "Naukri", "Applied")
+                            from core.notifier import notify
+                            notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
                     except Exception:
                         pass
             elif email_matches:
@@ -442,6 +455,8 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     log_message(f"Auto-fill error: {e}")
                 await wait_for_manual_submission(desc_page, has_doubts=has_doubts)
                 save_to_db(href, title, company, "LinkedIn", "Applied")
+                from core.notifier import notify
+                notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
             elif await apply_btn.count() > 0:
                 # Click standard apply and capture redirect
                 async def click_and_detect():
@@ -458,6 +473,8 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     if applied:
                         save_to_db(href, title, company, "LinkedIn", "Applied", f"Applied via ATS ({redirect_url})")
                         log_message(f"LinkedIn: Applied to external ATS ({redirect_url})")
+                        from core.notifier import notify
+                        notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
                     else:
                         save_to_db(href, title, company, "LinkedIn", "Suggested", f"Career Page: {redirect_url}")
                     await new_tab.close()
