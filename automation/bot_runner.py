@@ -14,6 +14,8 @@ from core.credential_store import get_credential
 from automation.llm_evaluator import evaluate_job_with_qwen
 from automation.form_autofiller import auto_fill_playwright_form
 from automation.job_scraper import fast_scrape_jobs
+import importlib
+from automation.ats_detector import detect_from_url, detect_from_dom
 
 # Pause helper
 async def check_pause():
@@ -213,6 +215,51 @@ async def wait_for_manual_submission(page, has_doubts=False):
         pass
 
 
+async def apply_to_url(page, job_url, job=None, profile=None):
+    """
+    Phase 4 Dispatcher (P4.2): Detects ATS platform via URL and DOM signatures,
+    then dynamically routes to the appropriate zero-LLM specialist or generalist handler.
+    """
+    if profile is None:
+        profile = CONFIG.get("candidate", {})
+    if job is None:
+        job = {"url": job_url}
+
+    ats = detect_from_url(job_url) or await detect_from_dom(page)
+    log_message(f"ATS Routing: Detected platform '{ats or 'Unknown'}' for {job_url}")
+
+    specialist_map = {
+        "greenhouse": "automation.specialists.greenhouse",
+        "lever":      "automation.specialists.lever",
+        "ashby":      "automation.specialists.ashby",
+    }
+
+    # Check if a specialist (built-in or self-compiled) exists
+    mod_path = None
+    if ats:
+        specialist_file = os.path.join(os.path.dirname(__file__), "specialists", f"{ats}.py")
+        if os.path.exists(specialist_file):
+            mod_path = f"automation.specialists.{ats}"
+        else:
+            mod_path = specialist_map.get(ats)
+
+    if not mod_path:
+        mod_path = "automation.specialists.generalist"
+
+    try:
+        module = importlib.import_module(mod_path)
+        return await module.fill(page, profile)
+    except Exception as e:
+        log_message(f"ATS Specialist error ({mod_path}): {e}")
+        if mod_path != "automation.specialists.generalist":
+            try:
+                gen_module = importlib.import_module("automation.specialists.generalist")
+                return await gen_module.fill(page, profile)
+            except Exception as ge:
+                log_message(f"Generalist fallback error: {ge}")
+        return False
+
+
 async def process_job_evaluation(title, company, href, desc_text, platform, desc_page, browser):
     """
     Helper function that handles the shared LLM evaluation, scoring, doubt queue,
@@ -297,8 +344,22 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                 save_to_db(href, title, company, "Indeed", "Applied")
             elif await external_apply.count() > 0:
                 career_url = await external_apply.first.get_attribute("href")
-                log_message(f"SUGGESTED: External Career Page for {title} at {company}: {career_url}")
-                save_to_db(href, title, company, "Indeed", "Suggested", f"Career Page: {career_url}")
+                log_message(f"External Career Page detected for {title} at {company}: {career_url}")
+                applied = False
+                try:
+                    async with desc_page.context.expect_page(timeout=5000) as new_page_info:
+                        await external_apply.first.click()
+                    ext_page = await new_page_info.value
+                    await asyncio.sleep(2)
+                    applied = await apply_to_url(ext_page, ext_page.url, {"title": title, "company": company, "url": career_url}, CONFIG.get("candidate", {}))
+                    if applied:
+                        save_to_db(href, title, company, "Indeed", "Applied", f"Applied via ATS ({ext_page.url})")
+                        log_message(f"Indeed: Applied to external ATS ({ext_page.url})")
+                    else:
+                        save_to_db(href, title, company, "Indeed", "Suggested", f"Career Page: {career_url}")
+                    await ext_page.close()
+                except Exception:
+                    save_to_db(href, title, company, "Indeed", "Suggested", f"Career Page: {career_url}")
             elif email_matches:
                 company_email = email_matches[0]
                 log_message(f"SUGGESTED: Email Application for {title} at {company}: {company_email}")
@@ -321,8 +382,13 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     new_tab = await click_and_detect()
                     await asyncio.sleep(2)
                     redirect_url = new_tab.url
-                    log_message(f"SUGGESTED: Naukri click opened external company site: {redirect_url}")
-                    save_to_db(href, title, company, "Naukri", "Suggested", f"Career Page: {redirect_url}")
+                    log_message(f"Naukri click opened external company site: {redirect_url}")
+                    applied = await apply_to_url(new_tab, redirect_url, {"title": title, "company": company, "url": redirect_url}, CONFIG.get("candidate", {}))
+                    if applied:
+                        save_to_db(href, title, company, "Naukri", "Applied", f"Applied via ATS ({redirect_url})")
+                        log_message(f"Naukri: Applied to external ATS ({redirect_url})")
+                    else:
+                        save_to_db(href, title, company, "Naukri", "Suggested", f"Career Page: {redirect_url}")
                     await new_tab.close()
                 except Exception:
                     # Fallback if no new page opens (inline redirection or standard modal)
@@ -330,8 +396,12 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     try:
                         current_url = desc_page.url
                         if "naukri.com" not in current_url:
-                            log_message(f"SUGGESTED: Naukri redirected page to external career site: {current_url}")
-                            save_to_db(href, title, company, "Naukri", "Suggested", f"Career Page: {current_url}")
+                            log_message(f"Naukri redirected page to external career site: {current_url}")
+                            applied = await apply_to_url(desc_page, current_url, {"title": title, "company": company, "url": current_url}, CONFIG.get("candidate", {}))
+                            if applied:
+                                save_to_db(href, title, company, "Naukri", "Applied", f"Applied via ATS ({current_url})")
+                            else:
+                                save_to_db(href, title, company, "Naukri", "Suggested", f"Career Page: {current_url}")
                         else:
                             has_doubts = False
                             try:
@@ -383,8 +453,13 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
                     new_tab = await click_and_detect()
                     await asyncio.sleep(2)
                     redirect_url = new_tab.url
-                    log_message(f"SUGGESTED: LinkedIn apply opened career link: {redirect_url}")
-                    save_to_db(href, title, company, "LinkedIn", "Suggested", f"Career Page: {redirect_url}")
+                    log_message(f"LinkedIn apply opened career link: {redirect_url}")
+                    applied = await apply_to_url(new_tab, redirect_url, {"title": title, "company": company, "url": redirect_url}, CONFIG.get("candidate", {}))
+                    if applied:
+                        save_to_db(href, title, company, "LinkedIn", "Applied", f"Applied via ATS ({redirect_url})")
+                        log_message(f"LinkedIn: Applied to external ATS ({redirect_url})")
+                    else:
+                        save_to_db(href, title, company, "LinkedIn", "Suggested", f"Career Page: {redirect_url}")
                     await new_tab.close()
                 except Exception:
                     log_message(f"SUGGESTED: External Apply for {title} at {company}")
