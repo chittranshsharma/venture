@@ -6,4 +6,5 @@ python-jobspy>=1.1
 keyring>=24.0.0
 pyyaml>=6.0
 sentence-transformers>=2.7.0
-numpy
+numpy>=1.26.0,<2.0.0
+
