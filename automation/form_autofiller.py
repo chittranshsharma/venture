@@ -66,6 +66,19 @@ VAULT_FIELD_MAP = [
      ("candidate", "qa_vault", "work_authorization"), "Yes"),
     (["require sponsorship", "need sponsorship", "visa sponsorship"],
      ("candidate", "qa_vault", "require_sponsorship"), "No"),
+    # P3.3 — Extended Indian ATS & campus placement fields
+    (["10th", "ssc", "matriculation"],
+     ("candidate", "qa_vault", "education", "tenth_percentage"), "90"),
+    (["12th", "hsc", "intermediate"],
+     ("candidate", "qa_vault", "education", "twelfth_percentage"), "88"),
+    (["degree", "qualification"],
+     ("candidate", "qa_vault", "education", "degree"), "B.Tech"),
+    (["university", "college", "institute"],
+     ("candidate", "qa_vault", "education", "university"), ""),
+    (["stipend", "internship stipend"],
+     ("candidate", "qa_vault", "expected_stipend"), "15000"),
+    (["work preference", "remote", "work mode"],
+     ("candidate", "qa_vault", "work_preference"), "Remote"),
 ]
 
 
@@ -137,6 +150,7 @@ async def _ai_answer_question(question_text, job_title="", company=""):
     cand = CONFIG.get("candidate", {})
     skills = ", ".join(cand.get("skills", []))
     qa_vault = cand.get("qa_vault", {})
+    edu = qa_vault.get("education", {})
 
     prompt = f"""You are an expert job application assistant. Answer the following job application form question 
 for the candidate. Give ONLY the answer text, nothing else. Be concise and professional.
@@ -148,8 +162,11 @@ Candidate Profile:
 - Notice Period: {qa_vault.get('notice_period', 'Immediate')}
 - Current CTC: {qa_vault.get('current_ctc', '0')} LPA
 - Expected CTC: {qa_vault.get('expected_ctc', 'Negotiable')} LPA
+- Expected Stipend: {qa_vault.get('expected_stipend', '15000')}
+- Work Preference: {qa_vault.get('work_preference', 'Remote')}
 - Work Authorization: {qa_vault.get('work_authorization', 'Yes')}
 - Willing to Relocate: {qa_vault.get('willing_to_relocate', 'Yes')}
+- Education: {edu.get('degree', 'B.Tech')} from {edu.get('university', 'University')} (Grad: {edu.get('graduation_year', '2025')}, CGPA: {edu.get('cgpa', '8.5')}, 10th: {edu.get('tenth_percentage', '90')}%, 12th: {edu.get('twelfth_percentage', '88')}%)
 
 Job: {job_title} at {company}
 

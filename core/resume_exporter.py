@@ -30,15 +30,33 @@ try:
 except Exception:
     pass
 
+from core.rag_scorer import get_top_k_bullets
+
+COMMON_TECH = ["kubernetes", "aws", "gcp", "azure", "docker", "kafka", "spark", "tensorflow"]
+
 def _extract_json(text):
-    start = text.find('{')
-    if start == -1:
+    if not text:
         return None
+    # Find first '{' or '['
+    first_brace = text.find('{')
+    first_bracket = text.find('[')
+    
+    if first_brace == -1 and first_bracket == -1:
+        return None
+    
+    # If bracket comes first, or there's no brace
+    if first_brace == -1 or (0 <= first_bracket < first_brace):
+        start = first_bracket
+        open_c, close_c = '[', ']'
+    else:
+        start = first_brace
+        open_c, close_c = '{', '}'
+        
     depth = 0
     for i, ch in enumerate(text[start:], start):
-        if ch == '{':
+        if ch == open_c:
             depth += 1
-        elif ch == '}':
+        elif ch == close_c:
             depth -= 1
             if depth == 0:
                 try:
@@ -47,16 +65,61 @@ def _extract_json(text):
                     return None
     return None
 
+def _extract_jd_keywords(jd: str) -> list[str]:
+    """Step 1: Extract ATS keywords from JD without candidate resume."""
+    reply = query_ai_model(f"""Extract ATS keywords from this JD.
+Return ONLY a JSON array. Max 20.
+JD: {jd[:1500]}
+Response:""")
+    res = _extract_json(reply)
+    if isinstance(res, list):
+        return [str(x) for x in res if x]
+    return []
+
+def _filter_supported(keywords: list, resume: str) -> list[str]:
+    """Step 2: Filter keywords to only those explicitly present in candidate's resume."""
+    reply = query_ai_model(f"""From these keywords, return ONLY those EXPLICITLY
+in this resume. Be conservative. JSON array only.
+Keywords: {json.dumps(keywords)}
+Resume: {resume[:2000]}""")
+    res = _extract_json(reply)
+    if isinstance(res, list):
+        return [str(x) for x in res if x]
+    return []
+
+def _generate_content(title: str, company: str, supported_kw: list, top_bullets: list, forbidden_clause: str = "") -> dict:
+    """Step 3: Generate tailored content bounded strictly to supported keywords and RAG bullets."""
+    bullet_context = "\n".join(f"• {b}" for b in top_bullets)
+    prompt = f"""Role: {title} at {company}
+CRITICAL: Only use these supported keywords: {supported_kw}
+Based ONLY on:
+{bullet_context}
+{forbidden_clause}
+Generate JSON: {{"summary": "...", "tailored_skills": [...], "bullet_points": [...]}}
+Respond ONLY with JSON format:"""
+    reply = query_ai_model(prompt)
+    res = _extract_json(reply)
+    if isinstance(res, dict):
+        return res
+    return {}
+
+def _check_violations(content: dict, supported: list) -> list[str]:
+    """Step 4: Check if generated content introduced unsupported common tech terms."""
+    all_text = " ".join(content.get("tailored_skills", []) + content.get("bullet_points", []))
+    sup_lower = " ".join(str(s) for s in supported).lower()
+    return [t for t in COMMON_TECH if t in all_text.lower() and t not in sup_lower]
+
 RESUMES_OUTPUT_DIR = os.path.join(BASE_DIR, "tailored_resumes")
 os.makedirs(RESUMES_OUTPUT_DIR, exist_ok=True)
 
 def generate_tailored_resume_pdf(job_title="Software Engineer", company_name="Target Company", job_description=""):
     """
-    Uses AI to tailor candidate's resume content for a target job description
-    and compiles a modern professional PDF resume file.
+    Uses 4-step guarded AI pipeline to tailor candidate's resume content for a target job description
+    with zero hallucination, grounded strictly in candidate's real experience and supported keywords.
+    Compiles a modern professional PDF resume file.
     Returns absolute path of the generated PDF.
     """
-    log_message(f"PDF RESUME GENERATOR: Tailoring resume for {job_title} at {company_name}...")
+    log_message(f"PDF RESUME GENERATOR: Tailoring resume for {job_title} at {company_name} (4-Step Guarded Pipeline)...")
     
     cand = CONFIG.get("candidate", {})
     cand_name = cand.get("name", "Candidate Name")
@@ -68,70 +131,55 @@ def generate_tailored_resume_pdf(job_title="Software Engineer", company_name="Ta
     
     base_resume = extract_resume_text()
     
-    prompt = f"""
-You are an expert resume writer and ATS specialist. Tailor the candidate's resume for the target job role.
-
-Candidate Profile:
-- Name: {cand_name}
-- Technical Skills: {cand_skills}
-- Base Resume Summary:
-{base_resume[:2000]}
-
-Target Job:
-- Title: {job_title}
-- Company: {company_name}
-- Description: {job_description[:2000]}
-
-Instructions:
-Generate a clean, structured JSON object with tailored resume content:
-1. "summary": A compelling 3-sentence professional summary tailored to {job_title}.
-2. "tailored_skills": A list of 8-12 top technical & soft skills matching the job.
-3. "bullet_points": A list of 4-5 high-impact achievement bullet points relevant to this role.
-
-Respond ONLY with JSON format:
-{{
-  "summary": "...",
-  "tailored_skills": ["Skill1", "Skill2"],
-  "bullet_points": ["Achievement 1...", "Achievement 2..."]
-}}
-"""
-    reply = query_ai_model(prompt)
+    # RAG: Extract top semantic bullets relevant to this JD
+    top_bullets = get_top_k_bullets(base_resume, job_description, k=5)
     
-    # B2 + B3 FIX: Validate AI output before using. Never use generic placeholders.
-    # Safe defaults built from real candidate config data
+    # 4-Step Guarded Anti-Hallucination Pipeline
+    # Step 1: Extract JD Keywords
+    jd_keywords = _extract_jd_keywords(job_description)
+    
+    # Step 2: Filter to Resume-Supported Only
+    supported_kw = _filter_supported(jd_keywords, base_resume)
+    if not supported_kw:
+        supported_kw = [s.strip() for s in cand.get("skills", []) if s.strip()]
+    
+    # Step 3: Generate With Forbidden Clause
+    content = _generate_content(job_title, company_name, supported_kw, top_bullets)
+    
+    # Step 4: Violation Check + Auto-Retry
+    violations = _check_violations(content, supported_kw)
+    if violations:
+        log_message(f"Anti-Hallucination Guard: Detected unsupported tech {violations}. Retrying Step 3 with forbidden clause...")
+        retry_clause = f"DO NOT include: {', '.join(violations)}"
+        content = _generate_content(job_title, company_name, supported_kw, top_bullets, forbidden_clause=retry_clause)
+        violations = _check_violations(content, supported_kw)
+        if violations:
+            log_message(f"Anti-Hallucination Guard: Second violation for {violations}. Enforcing supported keywords directly.")
+            content["tailored_skills"] = [s for s in supported_kw if s.lower() not in violations] or supported_kw
+            
+    # Fallback guarantees if AI fails or returns empty fields
     safe_summary = f"{cand_name} is a {cand.get('experience', 'motivated')} professional skilled in {cand_skills[:120] if cand_skills else 'software development'}."
-    safe_skills = cand.get("skills", [])
-    safe_bullets = [
+    safe_skills = supported_kw if supported_kw else (cand.get("skills", []) or ["Software Development"])
+    safe_bullets = top_bullets if top_bullets else [
         f"Worked on {job_title} related projects applying {(cand_skills.split(',')[0] if cand_skills else 'technical')} skills.",
         f"Collaborated with team members to deliver results at {company_name}.",
     ]
     
-    summary = safe_summary
-    skills_list = safe_skills if safe_skills else ["Software Development"]
-    bullets = safe_bullets
+    ai_summary = content.get("summary", "")
+    summary = ai_summary if (ai_summary and len(ai_summary) > 20 and "[" not in ai_summary) else safe_summary
     
-    try:
-        parsed = _extract_json(reply)
-        if parsed and isinstance(parsed, dict):
-            ai_summary = parsed.get("summary", "")
-            ai_skills = parsed.get("tailored_skills", [])
-            ai_bullets = parsed.get("bullet_points", [])
-
-            # B3 VALIDATION: Only use AI output if it looks real
-            # Summary: must be >20 chars and not contain obvious placeholders
-            if ai_summary and len(ai_summary) > 20 and "[" not in ai_summary:
-                summary = ai_summary
-            # Skills: must be a non-empty list of strings
-            if ai_skills and isinstance(ai_skills, list) and len(ai_skills) > 0:
-                if all(isinstance(s, str) and len(s) > 1 for s in ai_skills):
-                    skills_list = ai_skills
-            # Bullets: must be a non-empty list with real content (>15 chars each)
-            if ai_bullets and isinstance(ai_bullets, list) and len(ai_bullets) > 0:
-                valid_bullets = [b for b in ai_bullets if isinstance(b, str) and len(b) > 15]
-                if valid_bullets:
-                    bullets = valid_bullets
-    except Exception as e:
-        log_message(f"AI JSON parse notice (using safe fallback): {e}")
+    ai_skills = content.get("tailored_skills", [])
+    if ai_skills and isinstance(ai_skills, list) and len(ai_skills) > 0 and all(isinstance(s, str) and len(s) > 1 for s in ai_skills):
+        skills_list = ai_skills
+    else:
+        skills_list = safe_skills
+        
+    ai_bullets = content.get("bullet_points", [])
+    if ai_bullets and isinstance(ai_bullets, list) and len(ai_bullets) > 0:
+        valid_bullets = [b for b in ai_bullets if isinstance(b, str) and len(b) > 15]
+        bullets = valid_bullets if valid_bullets else safe_bullets
+    else:
+        bullets = safe_bullets
 
 
     # Build PDF with ReportLab

@@ -199,6 +199,13 @@ def evaluate_job_with_qwen(job_title, job_description):
     queries_str = ", ".join([str(q) for q in target_queries])
     skip_str = ", ".join([str(k) for k in skip_kw])
 
+    # P3.1 — Local RAG Scoring Engine: Cosine-ranked top-5 relevant resume bullets
+    from core.rag_scorer import get_top_k_bullets
+    from core.resume_parser import extract_resume_text
+    base_resume = extract_resume_text()
+    top_bullets = get_top_k_bullets(base_resume, job_description, k=5)
+    resume_snippet = "\n".join(f"• {b}" for b in top_bullets) if top_bullets else "Candidate technical experience."
+
     prompt = f"""
 You are an expert HR recruiter and AI job matching system.
 
@@ -207,8 +214,11 @@ Job Title: {job_title}
 Job Description Snippet:
 {job_description[:2000]}
 
-Candidate Skills: {skills_str}
 Candidate Target Roles: {queries_str}
+Candidate Core Skills: {skills_str}
+Relevant Candidate Experience (Top RAG-ranked matching highlights):
+{resume_snippet}
+
 Skip Keywords (Reject if present): {skip_str}
 
 Return a JSON object with these exact keys:

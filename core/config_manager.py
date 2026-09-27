@@ -43,11 +43,27 @@ DEFAULT_CONFIG = {
             "experience_years": "1",
             "notice_period": "Immediate",
             "current_ctc": "0",
-            "expected_ctc": "0",
+            "expected_ctc": "3",
+            "expected_stipend": "15000",
             "work_authorization": "Yes",
             "require_sponsorship": "No",
             "willing_to_relocate": "Yes",
-            "gender": "Decline to state"
+            "work_preference": "Remote",
+            "gender": "Decline to state",
+            "education": {
+                "degree": "B.Tech Computer Science",
+                "university": "XYZ University",
+                "graduation_year": "2025",
+                "cgpa": "8.5",
+                "tenth_percentage": "92",
+                "twelfth_percentage": "88"
+            },
+            "skills_by_category": {
+                "primary": ["Python", "React"],
+                "tools": ["Git", "Docker", "Postman"],
+                "databases": ["PostgreSQL", "MongoDB"],
+                "cloud": ["AWS", "GCP"]
+            }
         }
     },
     "settings": {
