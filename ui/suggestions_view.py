@@ -22,8 +22,14 @@ class SuggestionsView(ctk.CTkFrame):
         # ── Header ──
         title_row = ctk.CTkFrame(self, fg_color="transparent")
         title_row.pack(fill='x', pady=(0, 14))
-        lbl_title = ctk.CTkLabel(title_row, text="Career Suggestions", font=F["h1"], text_color=C["text"])
-        lbl_title.pack(side='left')
+        
+        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
+        title_box.pack(side='left', anchor='w')
+        
+        lbl_title = ctk.CTkLabel(title_box, text="Career Suggestions", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title.pack(anchor='w')
+        lbl_sub = ctk.CTkLabel(title_box, text="AI matching insights and tailored outreach drafting engine.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # ── Split Layout ──
         card_split = ctk.CTkFrame(self, fg_color="transparent")
@@ -32,41 +38,57 @@ class SuggestionsView(ctk.CTkFrame):
         card_split.columnconfigure(1, weight=1)
         card_split.rowconfigure(0, weight=1)
         
-        left_card = ctk.CTkFrame(card_split, fg_color=C["card"], corner_radius=12)
+        # Left Panel (Opportunities Table)
+        left_card = ctk.CTkFrame(
+            card_split, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         left_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
         
         columns = ('company', 'role', 'detail')
         self.sug_tree = ttk.Treeview(left_card, columns=columns, show='headings', style="Dark.Treeview")
         self.sug_tree.heading('company', text='Company')
         self.sug_tree.heading('role', text='Role')
-        self.sug_tree.heading('detail', text='Target Email/URL')
+        self.sug_tree.heading('detail', text='Target / URL')
         
-        self.sug_tree.column('company', width=100)
-        self.sug_tree.column('role', width=130)
+        self.sug_tree.column('company', width=110)
+        self.sug_tree.column('role', width=140)
         self.sug_tree.column('detail', width=180)
         self.sug_tree.bind("<<TreeviewSelect>>", self.on_suggestion_select)
-        self.sug_tree.pack(fill='both', expand=True, padx=10, pady=10)
+        self.sug_tree.pack(fill='both', expand=True, padx=12, pady=12)
         
-        self.right_card = ctk.CTkFrame(card_split, fg_color=C["card"], corner_radius=12)
+        # Right Panel (Tailored Cover Letter Draft)
+        self.right_card = ctk.CTkFrame(
+            card_split, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         self.right_card.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
         
         preview_header = ctk.CTkFrame(self.right_card, fg_color="transparent")
         preview_header.pack(fill='x', padx=14, pady=(12, 8))
-        lbl_preview = ctk.CTkLabel(preview_header, text="AI Cover Letter Draft", font=F["h3"], text_color=C["text"])
+        lbl_preview = ctk.CTkLabel(preview_header, text="Tailored Cover Letter Draft", font=F["h3"], text_color=C["ink"])
         lbl_preview.pack(side='left')
         
-        ai_badge = ctk.CTkLabel(preview_header, text="AUTO", fg_color=C["purple"], text_color="white",
-                                font=F["xs_b"], corner_radius=6, width=48, height=20)
-        ai_badge.pack(side='left', padx=(8, 0))
+        ai_badge = ctk.CTkLabel(
+            preview_header, text="  RAG · OUTREACH  ",
+            fg_color=C["elevated"], text_color=C["charcoal"],
+            font=F["xs_b"], corner_radius=9999, height=22
+        )
+        ai_badge.pack(side='right')
         
-        preview_inner = ctk.CTkFrame(self.right_card, fg_color=C["input"], corner_radius=8)
+        preview_inner = ctk.CTkFrame(
+            self.right_card, fg_color=C["deep"], corner_radius=8,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         preview_inner.pack(fill='both', expand=True, padx=14, pady=(0, 10))
         
-        self.sug_preview = scrolledtext.ScrolledText(preview_inner,
-            bg=C["input"], fg=C["text"],
+        self.sug_preview = scrolledtext.ScrolledText(
+            preview_inner,
+            bg=C["deep"], fg=C["text"],
             insertbackground="white", font=F["sm"],
-            wrap='word', bd=0, highlightthickness=0)
-        self.sug_preview.pack(fill='both', expand=True, padx=6, pady=6)
+            wrap='word', bd=0, highlightthickness=0
+        )
+        self.sug_preview.pack(fill='both', expand=True, padx=8, pady=8)
         
         btn_row = ctk.CTkFrame(self.right_card, fg_color="transparent")
         btn_row.pack(fill='x', padx=14, pady=(0, 14))
@@ -74,17 +96,17 @@ class SuggestionsView(ctk.CTkFrame):
         self.btn_copy_draft = create_action_btn(btn_row, "Copy Draft", self.copy_draft_to_clipboard, "primary", "small")
         self.btn_copy_draft.pack(side='left', padx=(0, 6))
         
-        self.btn_gen_pdf = create_action_btn(btn_row, "📄 Tailor Resume PDF", self.generate_pdf_action, "warning", "small")
+        self.btn_gen_pdf = create_action_btn(btn_row, "📄 Tailor PDF", self.generate_pdf_action, "ghost", "small")
         self.btn_gen_pdf.pack(side='left', padx=(0, 6))
         
-        self.btn_open_target = create_action_btn(btn_row, "Open URL", self.open_suggestion_link, "success", "small")
+        self.btn_open_target = create_action_btn(btn_row, "Open URL", self.open_suggestion_link, "ghost", "small")
         self.btn_open_target.pack(side='left', padx=(0, 6))
 
-        self.btn_mark_applied = create_action_btn(btn_row, "✓ Mark Done", self.mark_suggestion_as_applied, "outline", "small")
-        self.btn_mark_applied.pack(side='left')
+        self.btn_mark_applied = create_action_btn(btn_row, "✓ Mark Done", self.mark_suggestion_as_applied, "ghost", "small")
+        self.btn_mark_applied.pack(side='left', padx=(0, 6))
 
-        self.btn_send_email = create_action_btn(btn_row, "\u2709\ufe0f Send Email", self.send_direct_smtp_email_action, "primary", "small")
-        self.btn_send_email.pack(side='left', padx=(6, 0))
+        self.btn_send_email = create_action_btn(btn_row, "✉ Send Email", self.send_direct_smtp_email_action, "ghost", "small")
+        self.btn_send_email.pack(side='left')
         
         self.load_suggestions_table()
 

@@ -15,8 +15,14 @@ class ApprovalsView(ctk.CTkFrame):
         # ── Header ──
         title_row = ctk.CTkFrame(self, fg_color="transparent")
         title_row.pack(fill='x', pady=(0, 14))
-        lbl_title = ctk.CTkLabel(title_row, text="Doubt Queue Approvals", font=F["h1"], text_color=C["text"])
-        lbl_title.pack(side='left')
+        
+        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
+        title_box.pack(side='left', anchor='w')
+        
+        lbl_title = ctk.CTkLabel(title_box, text="Doubt Queue Approvals", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title.pack(anchor='w')
+        lbl_sub = ctk.CTkLabel(title_box, text="Human-in-the-loop validation queue for borderline job evaluations.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub.pack(anchor='w', pady=(2, 0))
 
         # ── Split Layout ──
         card_split = ctk.CTkFrame(self, fg_color="transparent")
@@ -25,8 +31,11 @@ class ApprovalsView(ctk.CTkFrame):
         card_split.columnconfigure(1, weight=2)
         card_split.rowconfigure(0, weight=1)
 
-        # ── Left: job list ──
-        left_card = ctk.CTkFrame(card_split, fg_color=C["card"], corner_radius=12)
+        # ── Left: Job List Card ──
+        left_card = ctk.CTkFrame(
+            card_split, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         left_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
 
         columns = ('company', 'role', 'score')
@@ -38,32 +47,41 @@ class ApprovalsView(ctk.CTkFrame):
         self.appr_tree.column('role', width=150)
         self.appr_tree.column('score', width=70)
         self.appr_tree.bind("<<TreeviewSelect>>", self.on_approval_select)
-        self.appr_tree.pack(fill='both', expand=True, padx=10, pady=10)
+        self.appr_tree.pack(fill='both', expand=True, padx=12, pady=12)
 
-        # ── Right: structured detail panel ──
-        right_card = ctk.CTkFrame(card_split, fg_color=C["card"], corner_radius=12)
+        # ── Right: Structured Detail Panel ──
+        right_card = ctk.CTkFrame(
+            card_split, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         right_card.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
         right_card.columnconfigure(0, weight=1)
-        right_card.rowconfigure(3, weight=1)  # description row expands
+        right_card.rowconfigure(3, weight=1)
 
-        # Row 0: Score badge strip
-        score_strip = ctk.CTkFrame(right_card, fg_color=C["input"], corner_radius=8)
+        # Row 0: Score Badge Strip (Surface Deep)
+        score_strip = ctk.CTkFrame(
+            right_card, fg_color=C["deep"], corner_radius=8,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         score_strip.grid(row=0, column=0, sticky='ew', padx=14, pady=(12, 6))
         score_strip.columnconfigure(1, weight=1)
 
         self._lbl_score_val = ctk.CTkLabel(
             score_strip, text="—",
-            font=("Segoe UI", 30, "bold"), text_color=C["muted"])
+            font=F["metric"], text_color=C["charcoal"]
+        )
         self._lbl_score_val.grid(row=0, column=0, rowspan=2, padx=(14, 12), pady=8)
 
         self._lbl_badge = ctk.CTkLabel(
             score_strip, text="NO JOB SELECTED",
-            font=("Segoe UI", 11, "bold"), text_color=C["muted"])
+            font=F["xs_b"], text_color=C["muted"]
+        )
         self._lbl_badge.grid(row=0, column=1, sticky='w', padx=(0, 10), pady=(8, 2))
 
         self._lbl_meta = ctk.CTkLabel(
             score_strip, text="",
-            font=("Segoe UI", 10), text_color=C["dim"])
+            font=F["xs"], text_color=C["ash"]
+        )
         self._lbl_meta.grid(row=1, column=1, sticky='w', padx=(0, 10), pady=(0, 8))
 
         # Row 1: Strengths
@@ -71,51 +89,63 @@ class ApprovalsView(ctk.CTkFrame):
         s_outer.grid(row=1, column=0, sticky='ew', padx=14, pady=(4, 2))
         ctk.CTkLabel(
             s_outer, text="✓  STRENGTHS",
-            font=("Segoe UI", 10, "bold"), text_color=C["green"]
+            font=F["xs_b"], text_color=C["green"]
         ).pack(anchor='w')
-        s_box = ctk.CTkFrame(s_outer, fg_color=C["input"], corner_radius=6)
+        s_box = ctk.CTkFrame(
+            s_outer, fg_color=C["deep"], corner_radius=6,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         s_box.pack(fill='x', pady=(3, 0))
         self._lbl_strengths = ctk.CTkLabel(
-            s_box, text="Select a job to see match details.",
-            font=("Segoe UI", 10), text_color=C["muted"],
-            anchor='w', justify='left', wraplength=400)
-        self._lbl_strengths.pack(anchor='w', padx=10, pady=7)
+            s_box, text="Select a job to inspect match criteria.",
+            font=F["sm"], text_color=C["charcoal"],
+            anchor='w', justify='left', wraplength=420
+        )
+        self._lbl_strengths.pack(anchor='w', padx=12, pady=8)
 
         # Row 2: Gaps
         g_outer = ctk.CTkFrame(right_card, fg_color="transparent")
         g_outer.grid(row=2, column=0, sticky='ew', padx=14, pady=(2, 4))
         ctk.CTkLabel(
             g_outer, text="⚠  GAPS",
-            font=("Segoe UI", 10, "bold"), text_color=C["amber"]
+            font=F["xs_b"], text_color=C["amber"]
         ).pack(anchor='w')
-        g_box = ctk.CTkFrame(g_outer, fg_color=C["input"], corner_radius=6)
+        g_box = ctk.CTkFrame(
+            g_outer, fg_color=C["deep"], corner_radius=6,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         g_box.pack(fill='x', pady=(3, 0))
         self._lbl_gaps = ctk.CTkLabel(
             g_box, text="—",
-            font=("Segoe UI", 10), text_color=C["muted"],
-            anchor='w', justify='left', wraplength=400)
-        self._lbl_gaps.pack(anchor='w', padx=10, pady=7)
+            font=F["sm"], text_color=C["charcoal"],
+            anchor='w', justify='left', wraplength=420
+        )
+        self._lbl_gaps.pack(anchor='w', padx=12, pady=8)
 
-        # Row 3: Reason + JD (scrollable)
+        # Row 3: Reason & JD (Scrollable well in Surface Deep)
         d_outer = ctk.CTkFrame(right_card, fg_color="transparent")
-        d_outer.grid(row=3, column=0, sticky='nsew', padx=14, pady=(0, 4))
+        d_outer.grid(row=3, column=0, sticky='nsew', padx=14, pady=(0, 6))
         d_outer.rowconfigure(1, weight=1)
         d_outer.columnconfigure(0, weight=1)
         ctk.CTkLabel(
             d_outer, text="REASON & JD",
-            font=("Segoe UI", 10, "bold"), text_color=C["muted"]
+            font=F["xs_b"], text_color=C["muted"]
         ).grid(row=0, column=0, sticky='w')
-        d_box = ctk.CTkFrame(d_outer, fg_color=C["input"], corner_radius=6)
+        d_box = ctk.CTkFrame(
+            d_outer, fg_color=C["deep"], corner_radius=6,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         d_box.grid(row=1, column=0, sticky='nsew', pady=(3, 0))
         self.appr_desc = scrolledtext.ScrolledText(
-            d_box, bg=C["input"], fg=C["text"],
-            font=("Segoe UI", 10), wrap='word', bd=0, highlightthickness=0)
-        self.appr_desc.pack(fill='both', expand=True, padx=6, pady=6)
+            d_box, bg=C["deep"], fg=C["text"],
+            font=F["sm"], wrap='word', bd=0, highlightthickness=0
+        )
+        self.appr_desc.pack(fill='both', expand=True, padx=8, pady=8)
 
-        # Row 4: Action buttons
+        # Row 4: Action Buttons (White Primary Anchor + Danger Ghost)
         btn_row = ctk.CTkFrame(right_card, fg_color="transparent")
         btn_row.grid(row=4, column=0, sticky='ew', padx=14, pady=(0, 14))
-        btn_appr = create_action_btn(btn_row, "✓  Approve & Apply", self.approve_and_apply_job, "success", "normal")
+        btn_appr = create_action_btn(btn_row, "✓  Approve & Apply", self.approve_and_apply_job, "primary", "normal")
         btn_appr.pack(side='left', padx=(0, 8))
         btn_rej = create_action_btn(btn_row, "✕  Reject & Skip", self.reject_and_skip_job, "danger", "normal")
         btn_rej.pack(side='left')

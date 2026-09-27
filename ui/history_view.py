@@ -22,13 +22,19 @@ class HistoryView(ctk.CTkFrame):
         # ── Header Row ──
         title_row = ctk.CTkFrame(self, fg_color="transparent")
         title_row.pack(fill='x', pady=(0, 14))
-        lbl_title = ctk.CTkLabel(title_row, text="Application History", font=F["h1"], text_color=C["text"])
-        lbl_title.pack(side='left')
+        
+        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
+        title_box.pack(side='left', anchor='w')
+        
+        lbl_title = ctk.CTkLabel(title_box, text="Application History", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title.pack(anchor='w')
+        lbl_sub = ctk.CTkLabel(title_box, text="Persistent SQLite application record and lifecycle state tracker.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub.pack(anchor='w', pady=(2, 0))
         
         btn_frame = ctk.CTkFrame(title_row, fg_color="transparent")
         btn_frame.pack(side='right')
         
-        btn_export = create_action_btn(btn_frame, "Export CSV", self.export_csv, "success", "small")
+        btn_export = create_action_btn(btn_frame, "Export CSV", self.export_csv, "ghost", "small")
         btn_export.pack(side='right', padx=(8, 0))
         
         btn_scan = create_action_btn(btn_frame, "Scan Statuses", start_tracker_thread, "primary", "small")
@@ -37,8 +43,11 @@ class HistoryView(ctk.CTkFrame):
         btn_refresh = create_action_btn(btn_frame, "Refresh", self.load_history_table, "ghost", "small")
         btn_refresh.pack(side='right')
         
-        # ── Table Card ──
-        card = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=12)
+        # ── Table Card (Hairline Inset Card) ──
+        card = ctk.CTkFrame(
+            self, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         card.pack(fill='both', expand=True)
         
         columns = ('company', 'role', 'platform', 'status', 'detail', 'date')
@@ -53,17 +62,16 @@ class HistoryView(ctk.CTkFrame):
         self.tree.column('company', width=130)
         self.tree.column('role', width=180)
         self.tree.column('platform', width=80)
-        self.tree.column('status', width=80)
+        self.tree.column('status', width=90)
         self.tree.column('detail', width=220)
         self.tree.column('date', width=120)
 
-        # ── Status Row Color Tags (P2.2) ──
-        # Blue for Interview, Green for Offer, Dimmed Gray for Withdrawn, Red for Rejected
-        self.tree.tag_configure('interview', foreground='#38BDF8')
-        self.tree.tag_configure('offer', foreground='#34D399')
-        self.tree.tag_configure('withdrawn', foreground='#64748B')
-        self.tree.tag_configure('rejected', foreground='#F87171')
-        self.tree.tag_configure('applied', foreground='#F1F5F9')
+        # ── Status Row Color Tags ──
+        self.tree.tag_configure('interview', foreground=C["blue"])
+        self.tree.tag_configure('offer', foreground=C["green"])
+        self.tree.tag_configure('withdrawn', foreground=C["ash"])
+        self.tree.tag_configure('rejected', foreground=C["red"])
+        self.tree.tag_configure('applied', foreground=C["body"])
         
         scrollbar = ttk.Scrollbar(card, orient="vertical", command=self.tree.yview, style="Dark.Vertical.TScrollbar")
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -71,15 +79,17 @@ class HistoryView(ctk.CTkFrame):
         self.tree.pack(side='left', fill='both', expand=True, padx=12, pady=12)
         scrollbar.pack(side='right', fill='y', pady=12, padx=(0, 6))
 
-        # ── Right-Click Context Menu (P2.2) ──
+        # ── Right-Click Context Menu (Editorial Dark Surface) ──
         self.context_menu = tk.Menu(
             self.tree, 
             tearoff=0, 
-            bg="#1E293B", 
-            fg="#F8FAFC",
-            activebackground="#3B82F6", 
-            activeforeground="#FFFFFF",
-            font=("Segoe UI", 9)
+            bg=C["elevated"], 
+            fg=C["ink"],
+            activebackground=C["card_hover"], 
+            activeforeground=C["primary"],
+            relief='solid',
+            bd=1,
+            font=F["xs_b"]
         )
         self.context_menu.add_command(label="🎯 Mark as Interview", command=lambda: self.update_status_action(AppStatus.INTERVIEW))
         self.context_menu.add_command(label="🎉 Mark as Offer", command=lambda: self.update_status_action(AppStatus.OFFER))

@@ -13,11 +13,22 @@ class AccountsView(ctk.CTkFrame):
         self.controller = controller
         
         # ── Header ──
-        lbl_title = ctk.CTkLabel(self, text="Credentials & SMTP", font=F["h1"], text_color=C["text"], anchor="w")
-        lbl_title.pack(anchor='w', pady=(0, 14))
+        title_row = ctk.CTkFrame(self, fg_color="transparent")
+        title_row.pack(fill='x', pady=(0, 14))
+        
+        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
+        title_box.pack(side='left', anchor='w')
+        
+        lbl_title = ctk.CTkLabel(title_box, text="Credentials & SMTP", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title.pack(anchor='w')
+        lbl_sub = ctk.CTkLabel(title_box, text="Encrypted credentials storage and SMTP outreach dispatch configuration.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # ── Scrollable Card ──
-        card = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=12)
+        card = ctk.CTkScrollableFrame(
+            self, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         card.pack(fill='both', expand=True)
         
         # ── Job Board Logins ──

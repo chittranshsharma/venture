@@ -22,15 +22,23 @@ class ContactsView(ctk.CTkFrame):
         # ── Header Row ──
         title_row = ctk.CTkFrame(self, fg_color="transparent")
         title_row.pack(fill='x', pady=(0, 14))
-        lbl_title = ctk.CTkLabel(title_row, text="Recruiter Contacts & Outreach", font=F["h1"], text_color=C["text"])
-        lbl_title.pack(side='left')
+        
+        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
+        title_box.pack(side='left', anchor='w')
+        
+        lbl_title = ctk.CTkLabel(title_box, text="Recruiter Contacts & Outreach", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title.pack(anchor='w')
+        lbl_sub = ctk.CTkLabel(title_box, text="Direct hiring manager intelligence and verified outreach channels.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # Search Entry
         self.search_var = tk.StringVar()
-        search_entry = ctk.CTkEntry(title_row, textvariable=self.search_var,
-                                   placeholder_text="Search by company, role, email or phone...",
-                                   fg_color=C["input"], border_color=C["border"],
-                                   text_color=C["text"], font=F["sm"], width=280, height=36, corner_radius=8)
+        search_entry = ctk.CTkEntry(
+            title_row, textvariable=self.search_var,
+            placeholder_text="Search recruiter, company, email...",
+            fg_color=C["input"], border_color=C["border"],
+            text_color=C["text"], font=F["sm"], width=280, height=36, corner_radius=8
+        )
         search_entry.pack(side='right', padx=(10, 0))
         self.search_var.trace_add("write", lambda *args: self.filter_contacts())
 
@@ -45,7 +53,10 @@ class ContactsView(ctk.CTkFrame):
         card_split.rowconfigure(0, weight=1)
         
         # Left Panel - Table
-        left_card = ctk.CTkFrame(card_split, fg_color=C["card"], corner_radius=12)
+        left_card = ctk.CTkFrame(
+            card_split, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         left_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
         
         columns = ('company', 'role', 'hr_name', 'email', 'phone')
@@ -67,22 +78,28 @@ class ContactsView(ctk.CTkFrame):
         scrollbar = ttk.Scrollbar(left_card, orient="vertical", command=self.contacts_tree.yview, style="Dark.Vertical.TScrollbar")
         self.contacts_tree.configure(yscrollcommand=scrollbar.set)
         
-        self.contacts_tree.pack(side='left', fill='both', expand=True, padx=10, pady=10)
-        scrollbar.pack(side='right', fill='y', pady=10, padx=(0, 4))
+        self.contacts_tree.pack(side='left', fill='both', expand=True, padx=12, pady=12)
+        scrollbar.pack(side='right', fill='y', pady=12, padx=(0, 4))
         
         # Right Panel - Recruiter Outreach Card
-        self.right_card = ctk.CTkScrollableFrame(card_split, fg_color=C["card"], corner_radius=12)
+        self.right_card = ctk.CTkScrollableFrame(
+            card_split, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         self.right_card.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
         
         # Selected Contact Details Display
-        self.lbl_company_role = ctk.CTkLabel(self.right_card, text="Select a Recruiter Contact", font=F["h2"], text_color=C["text"], anchor="w")
-        self.lbl_company_role.pack(anchor='w', padx=14, pady=(12, 4))
+        self.lbl_company_role = ctk.CTkLabel(self.right_card, text="Select a Recruiter Contact", font=F["h2"], text_color=C["ink"], anchor="w")
+        self.lbl_company_role.pack(anchor='w', padx=14, pady=(14, 2))
         
-        self.lbl_hr_name = ctk.CTkLabel(self.right_card, text="Discovered via automated scan", font=F["sm"], text_color=C["muted"], anchor="w")
-        self.lbl_hr_name.pack(anchor='w', padx=14, pady=(0, 12))
+        self.lbl_hr_name = ctk.CTkLabel(self.right_card, text="Discovered via autonomous ATS job scan", font=F["xs"], text_color=C["ash"], anchor="w")
+        self.lbl_hr_name.pack(anchor='w', padx=14, pady=(0, 14))
         
-        # Action Buttons Box (WhatsApp & Call)
-        self.action_box = ctk.CTkFrame(self.right_card, fg_color=C["input"], corner_radius=10)
+        # Action Box 1: WhatsApp & Phone
+        self.action_box = ctk.CTkFrame(
+            self.right_card, fg_color=C["deep"], corner_radius=8,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         self.action_box.pack(fill='x', padx=14, pady=(0, 12))
         
         self.lbl_phone_val = ctk.CTkLabel(self.action_box, text="Phone / WhatsApp: N/A", font=F["sm_b"], text_color=C["text"], anchor="w")
@@ -91,14 +108,17 @@ class ContactsView(ctk.CTkFrame):
         btn_phone_row = ctk.CTkFrame(self.action_box, fg_color="transparent")
         btn_phone_row.pack(fill='x', padx=12, pady=(0, 10))
         
-        self.btn_whatsapp = create_action_btn(btn_phone_row, "💬 Open WhatsApp Chat", self.open_whatsapp, "success", "small")
+        self.btn_whatsapp = create_action_btn(btn_phone_row, "💬 Open WhatsApp Chat", self.open_whatsapp, "ghost", "small")
         self.btn_whatsapp.pack(side='left', padx=(0, 8))
         
         self.btn_copy_phone = create_action_btn(btn_phone_row, "📞 Copy Number", self.copy_phone, "ghost", "small")
         self.btn_copy_phone.pack(side='left')
 
-        # Email & Cover Letter Section
-        self.email_box = ctk.CTkFrame(self.right_card, fg_color=C["input"], corner_radius=10)
+        # Action Box 2: Direct Email
+        self.email_box = ctk.CTkFrame(
+            self.right_card, fg_color=C["deep"], corner_radius=8,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         self.email_box.pack(fill='x', padx=14, pady=(0, 12))
         
         self.lbl_email_val = ctk.CTkLabel(self.email_box, text="Email: N/A", font=F["sm_b"], text_color=C["text"], anchor="w")
@@ -107,23 +127,28 @@ class ContactsView(ctk.CTkFrame):
         btn_email_row = ctk.CTkFrame(self.email_box, fg_color="transparent")
         btn_email_row.pack(fill='x', padx=12, pady=(0, 10))
         
-        self.btn_send_smtp = create_action_btn(btn_email_row, "✉️ Send Direct Email", self.send_direct_email, "primary", "small")
+        self.btn_send_smtp = create_action_btn(btn_email_row, "✉ Send Direct Email", self.send_direct_email, "primary", "small")
         self.btn_send_smtp.pack(side='left', padx=(0, 8))
         
         self.btn_copy_email = create_action_btn(btn_email_row, "📋 Copy Email", self.copy_email, "ghost", "small")
         self.btn_copy_email.pack(side='left')
 
-        # Cover Letter Preview Box
-        lbl_draft_title = ctk.CTkLabel(self.right_card, text="Tailored Cold Email / Outreach Pitch", font=F["h3"], text_color=C["text"], anchor="w")
+        # Action Box 3: Cover Letter Preview
+        lbl_draft_title = ctk.CTkLabel(self.right_card, text="Tailored Cold Email / Outreach Pitch", font=F["h3"], text_color=C["ink"], anchor="w")
         lbl_draft_title.pack(anchor='w', padx=14, pady=(8, 6))
         
-        draft_inner = ctk.CTkFrame(self.right_card, fg_color=C["input"], corner_radius=8)
-        draft_inner.pack(fill='x', padx=14, pady=(0, 12))
+        draft_inner = ctk.CTkFrame(
+            self.right_card, fg_color=C["deep"], corner_radius=8,
+            border_width=1, border_color=C["hairline_strong"]
+        )
+        draft_inner.pack(fill='x', padx=14, pady=(0, 14))
         
-        self.draft_preview = scrolledtext.ScrolledText(draft_inner,
-            bg=C["input"], fg=C["text"],
-            font=F["sm"], wrap='word', bd=0, height=10, highlightthickness=0)
-        self.draft_preview.pack(fill='both', expand=True, padx=6, pady=6)
+        self.draft_preview = scrolledtext.ScrolledText(
+            draft_inner,
+            bg=C["deep"], fg=C["text"],
+            font=F["sm"], wrap='word', bd=0, height=9, highlightthickness=0
+        )
+        self.draft_preview.pack(fill='both', expand=True, padx=8, pady=8)
         
         self.selected_contact = None
         self.load_contacts_table()

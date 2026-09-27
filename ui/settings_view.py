@@ -13,11 +13,22 @@ class SettingsView(ctk.CTkFrame):
         self.controller = controller
         
         # ── Header ──
-        lbl_title = ctk.CTkLabel(self, text="AI & Search Settings", font=F["h1"], text_color=C["text"], anchor="w")
-        lbl_title.pack(anchor='w', pady=(0, 14))
+        title_row = ctk.CTkFrame(self, fg_color="transparent")
+        title_row.pack(fill='x', pady=(0, 14))
+        
+        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
+        title_box.pack(side='left', anchor='w')
+        
+        lbl_title = ctk.CTkLabel(title_box, text="AI & Search Settings", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title.pack(anchor='w')
+        lbl_sub = ctk.CTkLabel(title_box, text="Model provider configuration, telemetry thresholds, and execution filters.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # ── Scrollable Card ──
-        card = ctk.CTkScrollableFrame(self, fg_color=C["card"], corner_radius=12)
+        card = ctk.CTkScrollableFrame(
+            self, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         card.pack(fill='both', expand=True)
         
         # ═══════════════════════════════════════════════════
@@ -35,14 +46,14 @@ class SettingsView(ctk.CTkFrame):
             f_ai,
             values=["Local Ollama (Offline)", "Cloud AI / REST API"],
             command=self.on_provider_changed,
-            selected_color=C["accent"],
-            selected_hover_color=C["accent_d"],
+            selected_color=C["primary"],
+            selected_hover_color=C["accent_h"],
             unselected_color=C["input"],
             unselected_hover_color=C["card_hover"],
-            text_color=C["text"],
-            font=F["sm_b"],
-            corner_radius=10,
-            height=38
+            text_color=C["primary_on"],
+            font=F["xs_b"],
+            corner_radius=8,
+            height=36
         )
         self.seg_provider.pack(fill='x', pady=(0, 10))
         self.seg_provider.set("Cloud AI / REST API" if provider_val == "cloud" else "Local Ollama (Offline)")

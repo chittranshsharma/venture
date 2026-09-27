@@ -66,9 +66,15 @@ class DashboardView(ctk.CTkFrame):
         
         # ── Header Row ──
         title_row = ctk.CTkFrame(self, fg_color="transparent")
-        title_row.pack(fill='x', pady=(0, 10))
-        lbl_title = ctk.CTkLabel(title_row, text="Control Dashboard", font=F["h1"], text_color=C["text"])
-        lbl_title.pack(side='left')
+        title_row.pack(fill='x', pady=(0, 12))
+        
+        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
+        title_box.pack(side='left', anchor='w')
+        
+        lbl_title = ctk.CTkLabel(title_box, text="Control Dashboard", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title.pack(anchor='w')
+        lbl_sub = ctk.CTkLabel(title_box, text="Real-time execution telemetry and autonomous pipeline.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub.pack(anchor='w', pady=(2, 0))
         
         btn_frame = ctk.CTkFrame(title_row, fg_color="transparent")
         btn_frame.pack(side='right')
@@ -82,35 +88,44 @@ class DashboardView(ctk.CTkFrame):
         self.btn_toggle = create_action_btn(btn_frame, "▶  Start Bot", self.toggle_bot_action, "primary", "normal")
         self.btn_toggle.pack(side='right')
 
-        # ── Radar Status Banner (P5.1) ──
-        self.radar_banner = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=8, height=36)
+        # ── Radar Status Banner (Elevated Surface with Hairline Border) ──
+        self.radar_banner = ctk.CTkFrame(
+            self, fg_color=C["card"], corner_radius=8,
+            border_width=1, border_color=C["border"], height=36
+        )
         self.radar_banner.pack(fill='x', pady=(0, 10))
 
-        self.radar_status_dot = ctk.CTkLabel(self.radar_banner, text="●", text_color=C["dim"], font=("Arial", 16))
+        self.radar_status_dot = ctk.CTkLabel(self.radar_banner, text="●", text_color=C["dim"], font=("Arial", 12))
         self.radar_status_dot.pack(side='left', padx=(12, 4))
 
-        self.radar_status_lbl = ctk.CTkLabel(self.radar_banner, text="Radar: Inactive — Background polling idle",
-                                            font=F["xs_b"], text_color=C["muted"])
+        self.radar_status_lbl = ctk.CTkLabel(
+            self.radar_banner, text="Radar: Inactive — Background polling idle",
+            font=F["xs_b"], text_color=C["muted"]
+        )
         self.radar_status_lbl.pack(side='left', padx=4)
 
-        self.radar_count_lbl = ctk.CTkLabel(self.radar_banner, text="0 new jobs found this session",
-                                           font=F["xs_b"], text_color=C["cyan"])
+        self.radar_count_lbl = ctk.CTkLabel(
+            self.radar_banner, text="0 new jobs found this session",
+            font=F["xs_b"], text_color=C["charcoal"]
+        )
         self.radar_count_lbl.pack(side='right', padx=14)
         
-        # ── Metric Cards Row (P5.3 SQLite-Powered) ──
+        # ── Metric Cards Row (Clean Editorial Cards with Hairlines) ──
         metrics_frame = ctk.CTkFrame(self, fg_color="transparent")
         metrics_frame.pack(fill='x', pady=(0, 6))
         metrics_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="equal")
         
-        self.applied_metric = self.create_metric_card(metrics_frame, "Applications Sent", "0", 0, C["green"])
-        self.interview_metric = self.create_metric_card(metrics_frame, "Interviews", "0", 1, C["amber"])
-        self.offer_metric = self.create_metric_card(metrics_frame, "Offers Received", "0", 2, C["purple"])
-        self.avg_score_metric = self.create_metric_card(metrics_frame, "Avg Match Score", "0%", 3, C["cyan"])
+        self.applied_metric = self.create_metric_card(metrics_frame, "APPLICATIONS SENT", "0", 0, "verified pipeline")
+        self.interview_metric = self.create_metric_card(metrics_frame, "INTERVIEWS SCHEDULED", "0", 1, "active leads")
+        self.offer_metric = self.create_metric_card(metrics_frame, "OFFERS RECEIVED", "0", 2, "terminal goal")
+        self.avg_score_metric = self.create_metric_card(metrics_frame, "AVG MATCH SCORE", "0%", 3, "semantic cosine")
         
         # Funnel & Session Conversion Label
-        self.session_stats_lbl = ctk.CTkLabel(self, text="Funnel: 0 Applied ➔ 0 Interviews (0%) ➔ 0 Offers (0%)",
-                                              text_color=C["muted"], font=F["xs_b"], anchor="w")
-        self.session_stats_lbl.pack(anchor='w', pady=(0, 10))
+        self.session_stats_lbl = ctk.CTkLabel(
+            self, text="Funnel: 0 Applied ➔ 0 Interviews (0%) ➔ 0 Offers (0%)",
+            text_color=C["ash"], font=F["xs"], anchor="w"
+        )
+        self.session_stats_lbl.pack(anchor='w', pady=(2, 10))
         
         # ── Workspace 2x2 Grid ──
         workspace_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -120,90 +135,131 @@ class DashboardView(ctk.CTkFrame):
         workspace_frame.rowconfigure(0, weight=1)
         workspace_frame.rowconfigure(1, weight=1)
         
-        # ── Logs Card ──
-        logs_card = ctk.CTkFrame(workspace_frame, fg_color=C["card"], corner_radius=12)
+        # ── Logs Card ({component.code-window} with Hairline Chrome) ──
+        logs_card = ctk.CTkFrame(
+            workspace_frame, fg_color=C["deep"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         logs_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8), pady=(0, 8))
         
-        log_top = ctk.CTkFrame(logs_card, fg_color="transparent")
-        log_top.pack(fill='x', padx=14, pady=(12, 6))
-        lbl_log_title = ctk.CTkLabel(log_top, text="Operation Logs", font=F["h3"], text_color=C["text"])
-        lbl_log_title.pack(side='left')
+        log_top = ctk.CTkFrame(logs_card, fg_color="transparent", height=32)
+        log_top.pack(fill='x', padx=14, pady=(10, 4))
+        
+        # Traffic Lights Chrome
+        dots = ctk.CTkFrame(log_top, fg_color="transparent")
+        dots.pack(side='left', pady=2)
+        ctk.CTkLabel(dots, text="●", font=("Arial", 11), text_color=C["red"], width=13).pack(side='left')
+        ctk.CTkLabel(dots, text="●", font=("Arial", 11), text_color=C["yellow"], width=13).pack(side='left')
+        ctk.CTkLabel(dots, text="●", font=("Arial", 11), text_color=C["green"], width=13).pack(side='left')
+        
+        lbl_log_title = ctk.CTkLabel(log_top, text=" venture.daemon.log", font=F["mono_sm"], text_color=C["charcoal"])
+        lbl_log_title.pack(side='left', padx=(4, 0))
         
         self.log_search_var = tk.StringVar()
-        log_search = ctk.CTkEntry(log_top, textvariable=self.log_search_var,
-                                 placeholder_text="Search logs...",
-                                 fg_color=C["input"], border_color=C["border"],
-                                 text_color=C["text"], font=F["xs"], width=180, height=30, corner_radius=8)
+        log_search = ctk.CTkEntry(
+            log_top, textvariable=self.log_search_var,
+            placeholder_text="Filter logs...",
+            fg_color=C["input"], border_color=C["hairline_strong"],
+            text_color=C["ink"], font=F["xs"], width=150, height=26, corner_radius=6
+        )
         log_search.pack(side='right')
         
-        logs_inner = ctk.CTkFrame(logs_card, fg_color=C["input"], corner_radius=8)
-        logs_inner.pack(fill='both', expand=True, padx=14, pady=(0, 14))
+        logs_inner = ctk.CTkFrame(logs_card, fg_color=C["deep"], corner_radius=0)
+        logs_inner.pack(fill='both', expand=True, padx=12, pady=(0, 12))
         
-        self.logs_box = scrolledtext.ScrolledText(logs_inner,
-            bg=C["input"], fg=C["cyan"],
+        self.logs_box = scrolledtext.ScrolledText(
+            logs_inner,
+            bg=C["deep"], fg=C["body"],
             insertbackground="white",
-            font=F["mono"], bd=0, highlightthickness=0)
-        self.logs_box.pack(fill='both', expand=True, padx=6, pady=6)
+            font=F["mono_sm"], bd=0, highlightthickness=0
+        )
+        self.logs_box.pack(fill='both', expand=True, padx=4, pady=4)
         
         self.log_search_var.trace_add("write", lambda *args: self.update_logs_display())
         
         # ── Analytics Card (P5.3 Funnel, Sparkline & Platform Breakdown) ──
-        charts_card = ctk.CTkFrame(workspace_frame, fg_color=C["card"], corner_radius=12)
+        charts_card = ctk.CTkFrame(
+            workspace_frame, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         charts_card.grid(row=1, column=0, sticky='nsew', padx=(0, 8), pady=(8, 0))
         
-        lbl_charts_title = ctk.CTkLabel(charts_card, text="Pipeline Analytics (SQLite Live Data)", font=F["h3"], text_color=C["text"])
-        lbl_charts_title.pack(anchor='w', padx=14, pady=(12, 6))
+        charts_header = ctk.CTkFrame(charts_card, fg_color="transparent")
+        charts_header.pack(fill='x', padx=14, pady=(12, 4))
+        lbl_charts_title = ctk.CTkLabel(charts_header, text="Pipeline Analytics", font=F["h3"], text_color=C["ink"])
+        lbl_charts_title.pack(side='left')
+        lbl_charts_sub = ctk.CTkLabel(charts_header, text="SQLite live aggregate metrics", font=F["xs"], text_color=C["ash"])
+        lbl_charts_sub.pack(side='right')
         
         self.chart_canvas = tk.Canvas(charts_card, bg=C["card"], highlightthickness=0, bd=0)
-        self.chart_canvas.pack(fill='both', expand=True, padx=14, pady=(0, 14))
+        self.chart_canvas.pack(fill='both', expand=True, padx=14, pady=(0, 12))
         
-        # ── Chat Card ──
-        chat_card = ctk.CTkFrame(workspace_frame, fg_color=C["card"], corner_radius=12)
+        # ── Chat Card (Editorial Assistant Console) ──
+        chat_card = ctk.CTkFrame(
+            workspace_frame, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         chat_card.grid(row=0, column=1, rowspan=2, sticky='nsew', padx=(8, 0))
         
         chat_header = ctk.CTkFrame(chat_card, fg_color="transparent")
         chat_header.pack(fill='x', padx=14, pady=(12, 8))
-        lbl_chat_title = ctk.CTkLabel(chat_header, text="AI Assistant Chat", font=F["h3"], text_color=C["text"])
+        lbl_chat_title = ctk.CTkLabel(chat_header, text="AI Assistant Console", font=F["h3"], text_color=C["ink"])
         lbl_chat_title.pack(side='left')
         
-        chat_badge = ctk.CTkLabel(chat_header, text="RAG", fg_color=C["accent"], text_color="white",
-                                 font=F["xs_b"], corner_radius=6, width=42, height=20)
-        chat_badge.pack(side='left', padx=(8, 0))
+        chat_badge = ctk.CTkLabel(
+            chat_header, text="  RAG · QWEN  ",
+            fg_color=C["elevated"], text_color=C["charcoal"],
+            font=F["xs_b"], corner_radius=9999, height=22
+        )
+        chat_badge.pack(side='right')
         
-        chat_inner = ctk.CTkFrame(chat_card, fg_color=C["input"], corner_radius=8)
+        chat_inner = ctk.CTkFrame(
+            chat_card, fg_color=C["deep"], corner_radius=8,
+            border_width=1, border_color=C["hairline_strong"]
+        )
         chat_inner.pack(fill='both', expand=True, padx=14, pady=(0, 10))
         
-        self.chat_history = scrolledtext.ScrolledText(chat_inner,
-            bg=C["input"], fg=C["text"],
+        self.chat_history = scrolledtext.ScrolledText(
+            chat_inner,
+            bg=C["deep"], fg=C["text"],
             insertbackground="white", font=F["sm"],
-            bd=0, state='disabled', wrap='word', highlightthickness=0)
-        self.chat_history.pack(fill='both', expand=True, padx=6, pady=6)
+            bd=0, state='disabled', wrap='word', highlightthickness=0
+        )
+        self.chat_history.pack(fill='both', expand=True, padx=8, pady=8)
         
         input_row = ctk.CTkFrame(chat_card, fg_color="transparent")
         input_row.pack(fill='x', padx=14, pady=(0, 14))
         
-        self.chat_input = ctk.CTkEntry(input_row,
+        self.chat_input = ctk.CTkEntry(
+            input_row,
             placeholder_text="Ask about resume, jobs, or settings...",
             fg_color=C["input"], border_color=C["border"], text_color=C["text"],
-            font=F["sm"], corner_radius=8, height=38)
+            font=F["sm"], corner_radius=8, height=36
+        )
         self.chat_input.pack(side='left', fill='x', expand=True, padx=(0, 8))
         self.chat_input.bind("<Return>", lambda e: self.send_chat_message())
         
         btn_send = create_action_btn(input_row, "Send", self.send_chat_message, "primary", "small")
         btn_send.pack(side='right')
 
-    def create_metric_card(self, parent, label, val, col, accent_color):
-        card = ctk.CTkFrame(parent, fg_color=C["card"], corner_radius=12)
+    def create_metric_card(self, parent, label, val, col, subtext=""):
+        """Editorial Metric Card with hairline-strong border and Domaine typography"""
+        card = ctk.CTkFrame(
+            parent, fg_color=C["card"], corner_radius=12,
+            border_width=1, border_color=C["border"]
+        )
         card.grid(row=0, column=col, sticky='nsew', padx=5, pady=2)
         
-        accent_bar = ctk.CTkFrame(card, fg_color=accent_color, height=3, corner_radius=0)
-        accent_bar.pack(fill='x', pady=(0, 10))
-        
         lbl_lbl = ctk.CTkLabel(card, text=label, font=F["xs_b"], text_color=C["muted"], anchor="w")
-        lbl_lbl.pack(anchor='w', padx=14)
+        lbl_lbl.pack(anchor='w', padx=14, pady=(12, 0))
         
-        lbl_val = ctk.CTkLabel(card, text=val, font=F["metric"], text_color=accent_color, anchor="w")
-        lbl_val.pack(anchor='w', padx=14, pady=(2, 10))
+        lbl_val = ctk.CTkLabel(card, text=val, font=F["metric"], text_color=C["ink"], anchor="w")
+        lbl_val.pack(anchor='w', padx=14, pady=(2, 2))
+
+        if subtext:
+            lbl_sub = ctk.CTkLabel(card, text=subtext, font=F["xs"], text_color=C["ash"], anchor="w")
+            lbl_sub.pack(anchor='w', padx=14, pady=(0, 12))
+            
         return lbl_val
 
     def toggle_radar_action(self):
@@ -211,12 +267,12 @@ class DashboardView(ctk.CTkFrame):
         agent = get_radar_agent(callback=self.on_radar_job_found)
         if agent.is_running():
             agent.stop()
-            self.btn_radar.configure(text="📡  Radar: Off", fg_color=C["card_hover"])
+            self.btn_radar.configure(text="📡  Radar: Off", fg_color=C["elevated"], text_color=C["text"], border_color=C["border"])
             self.radar_status_dot.configure(text_color=C["dim"])
             self.radar_status_lbl.configure(text="Radar: Inactive — Background polling idle", text_color=C["muted"])
         else:
             agent.start()
-            self.btn_radar.configure(text="📡  Radar: On", fg_color=C["green"])
+            self.btn_radar.configure(text="📡  Radar: On", fg_color=C["elevated"], text_color=C["green"], border_color=C["green"])
             queries_cnt = len(CONFIG.get("settings", {}).get("queries", []))
             self.radar_status_dot.configure(text_color=C["green"])
             self.radar_status_lbl.configure(
@@ -258,23 +314,50 @@ class DashboardView(ctk.CTkFrame):
     def toggle_bot_action(self):
         if state.BOT_RUNNING:
             stop_bot()
-            self.btn_toggle.configure(text="▶  Start Bot", fg_color=C["accent"], hover_color=C["accent_d"])
+            self.btn_toggle.configure(
+                text="▶  Start Bot",
+                fg_color=C["primary"],
+                hover_color=C["accent_h"],
+                text_color=C["primary_on"],
+                border_width=0
+            )
         else:
             start_bot_thread()
-            self.btn_toggle.configure(text="■  Stop Bot", fg_color=C["red"], hover_color=C["red_h"])
+            self.btn_toggle.configure(
+                text="■  Stop Bot",
+                fg_color=C["elevated"],
+                hover_color=C["card_hover"],
+                text_color=C["red"],
+                border_width=1,
+                border_color=C["red"]
+            )
 
     def toggle_pause_action(self):
         state.BOT_PAUSED = not state.BOT_PAUSED
         if state.BOT_PAUSED:
-            self.btn_pause.configure(text="▶  Resume", fg_color=C["green"], hover_color=C["green_h"])
+            self.btn_pause.configure(
+                text="▶  Resume",
+                fg_color=C["elevated"],
+                hover_color=C["card_hover"],
+                text_color=C["green"],
+                border_width=1,
+                border_color=C["green"]
+            )
         else:
-            self.btn_pause.configure(text="⏸  Pause", fg_color=C["amber"], hover_color=C["amber_h"])
+            self.btn_pause.configure(
+                text="⏸  Pause",
+                fg_color=C["elevated"],
+                hover_color=C["card_hover"],
+                text_color=C["amber"],
+                border_width=1,
+                border_color=C["border"]
+            )
 
     def update_logs_display(self):
         if not hasattr(self, 'logs_box'):
             return
         search_query = self.log_search_var.get().strip().lower()
-        if search_query == "search logs...":
+        if search_query == "filter logs...":
             search_query = ""
             
         self.logs_box.delete('1.0', 'end')
@@ -299,7 +382,7 @@ class DashboardView(ctk.CTkFrame):
         today_match = state.SESSION_STATS.get("matches_today", 0)
         
         self.session_stats_lbl.configure(
-            text=f"Funnel: {s['applied']} Applied ➔ {s['interview']} Interviews ({int_rate}) ➔ {s['offer']} Offers ({offer_rate})  |  Today: {today_eval} evaluated, {today_match} matches"
+            text=f"Funnel: {s['applied']} Applied ➔ {s['interview']} Interviews ({int_rate}) ➔ {s['offer']} Offers ({offer_rate})  ·  Session: {today_eval} evaluated, {today_match} matched"
         )
         
         # Update Radar stats
@@ -307,15 +390,34 @@ class DashboardView(ctk.CTkFrame):
         self.radar_count_lbl.configure(text=f"{agent.new_jobs_found} new jobs found this session")
         if agent.is_running():
             self.radar_status_dot.configure(text_color=C["green"])
-            self.radar_status_lbl.configure(text=f"Radar: Active — {len(CONFIG.get('settings', {}).get('queries', []))} queries polling", text_color=C["green"])
+            self.radar_status_lbl.configure(
+                text=f"Radar: Active — {len(CONFIG.get('settings', {}).get('queries', []))} queries polling every {agent._interval}s",
+                text_color=C["green"]
+            )
         else:
             self.radar_status_dot.configure(text_color=C["dim"])
-            self.radar_status_lbl.configure(text="Radar: Inactive — Click 'Radar' to start background polling", text_color=C["muted"])
+            self.radar_status_lbl.configure(
+                text="Radar: Inactive — Background polling idle",
+                text_color=C["muted"]
+            )
             
         if state.BOT_RUNNING:
-            self.btn_toggle.configure(text="■  Stop Bot", fg_color=C["red"], hover_color=C["red_h"])
+            self.btn_toggle.configure(
+                text="■  Stop Bot",
+                fg_color=C["elevated"],
+                hover_color=C["card_hover"],
+                text_color=C["red"],
+                border_width=1,
+                border_color=C["red"]
+            )
         else:
-            self.btn_toggle.configure(text="▶  Start Bot", fg_color=C["accent"], hover_color=C["accent_d"])
+            self.btn_toggle.configure(
+                text="▶  Start Bot",
+                fg_color=C["primary"],
+                hover_color=C["accent_h"],
+                text_color=C["primary_on"],
+                border_width=0
+            )
             
         self.update_logs_display()
         self.draw_vector_charts(s)
@@ -332,7 +434,7 @@ class DashboardView(ctk.CTkFrame):
         mid_x = int(w * 0.52)
 
         # ── 1. Left Half: 7-Day Activity Sparkline ──
-        self.chart_canvas.create_text(20, 14, text="7-Day Applications Activity", fill=C["text"], font=F["xs_b"], anchor="w")
+        self.chart_canvas.create_text(20, 16, text="7-DAY APPLICATIONS VOLUME", fill=C["charcoal"], font=F["xs_b"], anchor="w")
         
         # Generate last 7 days list
         today = datetime.now().date()
@@ -340,16 +442,16 @@ class DashboardView(ctk.CTkFrame):
         days_data = []
         for i in range(6, -1, -1):
             d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-            label = (today - timedelta(days=i)).strftime("%a")
+            label = (today - timedelta(days=i)).strftime("%a").upper()
             days_data.append((label, date_map.get(d, 0)))
 
         max_activity = max([cnt for _, cnt in days_data] + [1])
         plot_x0, plot_x1 = 25, mid_x - 30
-        plot_y0, plot_y1 = 35, h - 30
+        plot_y0, plot_y1 = 40, h - 32
         step_x = (plot_x1 - plot_x0) / max(len(days_data) - 1, 1)
 
-        # Draw baseline
-        self.chart_canvas.create_line(plot_x0, plot_y1, plot_x1, plot_y1, fill=C["border"], width=1)
+        # Baseline hairline
+        self.chart_canvas.create_line(plot_x0, plot_y1, plot_x1, plot_y1, fill=C["hairline_strong"], width=1)
 
         points = []
         for idx, (label, count) in enumerate(days_data):
@@ -357,53 +459,52 @@ class DashboardView(ctk.CTkFrame):
             py = plot_y1 - (count / max_activity) * (plot_y1 - plot_y0)
             points.append((px, py, count, label))
 
-        # Connect sparkline dots
+        # Connect sparkline line
         for idx in range(len(points) - 1):
             x1, y1 = points[idx][0], points[idx][1]
             x2, y2 = points[idx + 1][0], points[idx + 1][1]
-            self.chart_canvas.create_line(x1, y1, x2, y2, fill=C["cyan"], width=2)
+            self.chart_canvas.create_line(x1, y1, x2, y2, fill=C["ink"], width=2)
 
-        # Draw points, values, and day labels
+        # Points & value labels
         for px, py, count, label in points:
             r = 3
-            self.chart_canvas.create_oval(px - r, py - r, px + r, py + r, fill=C["cyan"], outline=C["card"])
+            self.chart_canvas.create_oval(px - r, py - r, px + r, py + r, fill=C["ink"], outline=C["card"])
             if count > 0:
-                self.chart_canvas.create_text(px, py - 10, text=str(count), fill=C["text"], font=F["xs_b"])
-            self.chart_canvas.create_text(px, plot_y1 + 12, text=label, fill=C["muted"], font=("Segoe UI", 8))
+                self.chart_canvas.create_text(px, py - 10, text=str(count), fill=C["ink"], font=F["xs_b"])
+            self.chart_canvas.create_text(px, plot_y1 + 14, text=label, fill=C["ash"], font=F["xs"])
 
         # Divider between sparkline and platform breakdown
-        self.chart_canvas.create_line(mid_x - 10, 15, mid_x - 10, h - 15, fill=C["border"], width=1)
+        self.chart_canvas.create_line(mid_x - 12, 16, mid_x - 12, h - 16, fill=C["hairline"], width=1)
 
         # ── 2. Right Half: Platform Breakdown Bar Chart ──
-        self.chart_canvas.create_text(mid_x + 10, 14, text="Applications by Platform", fill=C["text"], font=F["xs_b"], anchor="w")
+        self.chart_canvas.create_text(mid_x + 10, 16, text="APPLICATIONS BY PLATFORM", fill=C["charcoal"], font=F["xs_b"], anchor="w")
         
         plats = s["by_platform"]
         if not plats:
-            # Fallback default display
             plats = [("Indeed", 0), ("Naukri", 0), ("LinkedIn", 0)]
 
         max_plat_c = max([c for _, c in plats] + [1])
-        start_y = 40
+        start_y = 44
         bar_max_w = w - mid_x - 90
-        colors_plat = {"indeed": C["blue"], "naukri": C["amber"], "linkedin": "#0077b5", "radar": C["cyan"]}
+        colors_plat = {"indeed": C["blue"], "naukri": C["yellow"], "linkedin": "#0077b5", "radar": C["green"]}
 
         for idx, (p_name, count) in enumerate(plats[:4]):
             y = start_y + idx * 28
             if y + 20 > h:
                 break
             p_display = (p_name or "Other").capitalize()
-            self.chart_canvas.create_text(mid_x + 10, y + 8, text=p_display[:10], fill=C["muted"], font=F["xs_b"], anchor="w")
+            self.chart_canvas.create_text(mid_x + 10, y + 8, text=p_display[:10], fill=C["charcoal"], font=F["xs"], anchor="w")
 
             bar_w = int((count / max_plat_c) * bar_max_w) if max_plat_c > 0 else 0
             bar_w = max(bar_w, 4) if count > 0 else 2
-            color = colors_plat.get(p_name.lower(), C["accent"])
+            color = colors_plat.get(p_name.lower(), C["charcoal"])
 
             # Background groove
-            self.chart_canvas.create_rectangle(mid_x + 85, y + 2, mid_x + 85 + bar_max_w, y + 14, fill=C["card_hover"], outline="")
+            self.chart_canvas.create_rectangle(mid_x + 85, y + 3, mid_x + 85 + bar_max_w, y + 13, fill=C["elevated"], outline=C["hairline"])
             # Filled bar
-            self.chart_canvas.create_rectangle(mid_x + 85, y + 2, mid_x + 85 + bar_w, y + 14, fill=color, outline="")
+            self.chart_canvas.create_rectangle(mid_x + 85, y + 3, mid_x + 85 + bar_w, y + 13, fill=color, outline="")
             # Count label
-            self.chart_canvas.create_text(mid_x + 95 + bar_max_w, y + 8, text=str(count), fill=C["text"], font=F["xs_b"], anchor="w")
+            self.chart_canvas.create_text(mid_x + 95 + bar_max_w, y + 8, text=str(count), fill=C["ink"], font=F["xs_b"], anchor="w")
 
     def send_chat_message(self):
         msg = self.chat_input.get().strip()
