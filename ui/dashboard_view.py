@@ -16,7 +16,7 @@ from automation.llm_evaluator import query_ai_model
 from automation.job_scraper import fast_scrape_jobs
 from automation.bot_runner import start_bot_thread, stop_bot
 from automation.radar import get_radar_agent
-from ui.components import C, F, create_action_btn
+from ui.components import C, F, create_action_btn, animate_count_up
 
 
 def _get_stats() -> dict:
@@ -170,7 +170,7 @@ class DashboardView(ctk.CTkFrame):
         self.logs_box = scrolledtext.ScrolledText(
             logs_inner,
             bg=C["deep"], fg=C["body"],
-            insertbackground="white",
+            insertbackground=C["ink"],
             font=F["mono_sm"], bd=0, highlightthickness=0
         )
         self.logs_box.pack(fill='both', expand=True, padx=4, pady=4)
@@ -221,8 +221,8 @@ class DashboardView(ctk.CTkFrame):
         
         self.chat_history = scrolledtext.ScrolledText(
             chat_inner,
-            bg=C["deep"], fg=C["text"],
-            insertbackground="white", font=F["sm"],
+            bg=C["deep"], fg=C["body"],
+            insertbackground=C["ink"], font=F["sm"],
             bd=0, state='disabled', wrap='word', highlightthickness=0
         )
         self.chat_history.pack(fill='both', expand=True, padx=8, pady=8)
@@ -370,10 +370,21 @@ class DashboardView(ctk.CTkFrame):
         recalculate_metrics()
         s = _get_stats()
         
-        self.applied_metric.configure(text=str(s["applied"]))
-        self.interview_metric.configure(text=str(s["interview"]))
-        self.offer_metric.configure(text=str(s["offer"]))
-        self.avg_score_metric.configure(text=f"{s['avg_score']}%")
+        new_applied   = s["applied"]
+        new_interview = s["interview"]
+        new_offer     = s["offer"]
+        new_score     = int(s["avg_score"])
+
+        prev = getattr(self, '_last_metrics', {})
+        if prev.get('applied')   != new_applied:   animate_count_up(self.applied_metric,   new_applied)
+        else:                                       self.applied_metric.configure(text=str(new_applied))
+        if prev.get('interview') != new_interview: animate_count_up(self.interview_metric, new_interview)
+        else:                                       self.interview_metric.configure(text=str(new_interview))
+        if prev.get('offer')     != new_offer:     animate_count_up(self.offer_metric,     new_offer)
+        else:                                       self.offer_metric.configure(text=str(new_offer))
+        if prev.get('score')     != new_score:     animate_count_up(self.avg_score_metric, new_score, suffix="%")
+        else:                                       self.avg_score_metric.configure(text=f"{new_score}%")
+        self._last_metrics = {'applied': new_applied, 'interview': new_interview, 'offer': new_offer, 'score': new_score}
         
         # Calculate funnel conversion percentages
         int_rate = f"{(s['interview'] / s['applied'] * 100):.1f}%" if s['applied'] > 0 else "0%"

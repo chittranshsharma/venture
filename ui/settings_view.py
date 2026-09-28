@@ -69,8 +69,8 @@ class SettingsView(ctk.CTkFrame):
         model_row.pack(fill='x')
         
         self.sel_model = ctk.CTkOptionMenu(model_row, fg_color=C["input"], button_color=C["card_hover"],
-                                          button_hover_color=C["border"], text_color=C["text"],
-                                          dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                          button_hover_color=C["border"], text_color=C["ink"],
+                                          dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.sel_model.pack(side='left', fill='x', expand=True, padx=(0, 10))
         
         btn_refresh_models = create_action_btn(model_row, "Refresh Models", self.refresh_models, "outline", "small")
@@ -90,8 +90,8 @@ class SettingsView(ctk.CTkFrame):
         self.sel_preset = ctk.CTkOptionMenu(f_preset, values=["OpenAI / ChatGPT", "DeepSeek", "Groq", "Google AI", "Custom Endpoint"],
                                            command=self.on_cloud_preset_selected,
                                            fg_color=C["input"], button_color=C["card_hover"],
-                                           button_hover_color=C["border"], text_color=C["text"],
-                                           dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                           button_hover_color=C["border"], text_color=C["ink"],
+                                           dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.sel_preset.pack(fill='x')
         self.sel_preset.set(CONFIG["settings"].get("cloud_ai_preset", "OpenAI / ChatGPT"))
         
@@ -105,7 +105,7 @@ class SettingsView(ctk.CTkFrame):
         ctk.CTkLabel(f_url, text="Base API Endpoint URL", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         
         self.entry_cloud_url = ctk.CTkEntry(f_url, fg_color=C["input"], border_color=C["border"],
-                                           text_color=C["text"], font=F["xs"], corner_radius=8, height=36)
+                                           text_color=C["ink"], font=F["xs"], corner_radius=8, height=36)
         self.entry_cloud_url.pack(fill='x')
         self.entry_cloud_url.insert(0, CONFIG["settings"].get("cloud_ai_base_url", "https://api.openai.com/v1"))
         
@@ -114,7 +114,7 @@ class SettingsView(ctk.CTkFrame):
         ctk.CTkLabel(f_cmod, text="Model Name / ID", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         
         self.entry_cloud_model = ctk.CTkEntry(f_cmod, fg_color=C["input"], border_color=C["border"],
-                                             text_color=C["text"], font=F["xs"], corner_radius=8, height=36)
+                                             text_color=C["ink"], font=F["xs"], corner_radius=8, height=36)
         self.entry_cloud_model.pack(fill='x')
         self.entry_cloud_model.insert(0, CONFIG["settings"].get("cloud_ai_model", "gpt-4o-mini"))
         
@@ -132,7 +132,7 @@ class SettingsView(ctk.CTkFrame):
             selected_hover_color=C["accent_d"],
             unselected_color=C["input"],
             unselected_hover_color=C["card_hover"],
-            text_color=C["text"],
+            text_color=C["ink"],
             font=F["xs_b"],
             corner_radius=8,
             height=34
@@ -145,7 +145,7 @@ class SettingsView(ctk.CTkFrame):
         self.f_key_sub.pack(fill='x', pady=4)
         ctk.CTkLabel(self.f_key_sub, text="API Key / Token", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         self.entry_cloud_key = ctk.CTkEntry(self.f_key_sub, fg_color=C["input"], border_color=C["border"],
-                                           text_color=C["text"], font=F["sm"], corner_radius=8, height=36, show="*")
+                                           text_color=C["ink"], font=F["sm"], corner_radius=8, height=36, show="*")
         self.entry_cloud_key.pack(fill='x')
         self.entry_cloud_key.insert(0, get_credential("settings.cloud_ai_api_key", CONFIG["settings"].get("cloud_ai_api_key", CONFIG["settings"].get("gemini_api_key", ""))))
 
@@ -160,7 +160,7 @@ class SettingsView(ctk.CTkFrame):
         f_u.grid(row=0, column=0, sticky='ew', padx=(0, 6))
         ctk.CTkLabel(f_u, text="API Username", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         self.entry_cloud_user = ctk.CTkEntry(f_u, fg_color=C["input"], border_color=C["border"],
-                                            text_color=C["text"], font=F["xs"], corner_radius=8, height=36)
+                                            text_color=C["ink"], font=F["xs"], corner_radius=8, height=36)
         self.entry_cloud_user.pack(fill='x')
         self.entry_cloud_user.insert(0, get_credential("settings.cloud_ai_username", CONFIG["settings"].get("cloud_ai_username", "")))
         
@@ -168,7 +168,7 @@ class SettingsView(ctk.CTkFrame):
         f_p.grid(row=0, column=1, sticky='ew', padx=(6, 0))
         ctk.CTkLabel(f_p, text="API Password", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         self.entry_cloud_pass = ctk.CTkEntry(f_p, fg_color=C["input"], border_color=C["border"],
-                                            text_color=C["text"], font=F["xs"], corner_radius=8, height=36, show="*")
+                                            text_color=C["ink"], font=F["xs"], corner_radius=8, height=36, show="*")
         self.entry_cloud_pass.pack(fill='x')
         self.entry_cloud_pass.insert(0, get_credential("settings.cloud_ai_password", CONFIG["settings"].get("cloud_ai_password", "")))
         
@@ -202,8 +202,8 @@ class SettingsView(ctk.CTkFrame):
         self.sel_scope = ctk.CTkOptionMenu(f_scope, values=["Entire Country", "Custom Cities & States"],
                                           command=self.on_scope_changed,
                                           fg_color=C["input"], button_color=C["card_hover"],
-                                          button_hover_color=C["border"], text_color=C["text"],
-                                          dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                          button_hover_color=C["border"], text_color=C["ink"],
+                                          dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.sel_scope.pack(fill='x')
         self.sel_scope.set(CONFIG["settings"].get("location_scope", "Entire Country"))
 
@@ -211,7 +211,7 @@ class SettingsView(ctk.CTkFrame):
         self.f_hierarchical = ctk.CTkFrame(card, fg_color="transparent")
         self.f_hierarchical.pack(fill='x', padx=16, pady=10)
         
-        ctk.CTkLabel(self.f_hierarchical, text="Location Hierarchy Selector", font=F["h3"], text_color=C["text"]).pack(anchor='w', pady=(0, 6))
+        ctk.CTkLabel(self.f_hierarchical, text="Location Hierarchy Selector", font=F["h3"], text_color=C["ink"]).pack(anchor='w', pady=(0, 6))
         
         drop_grid = ctk.CTkFrame(self.f_hierarchical, fg_color="transparent")
         drop_grid.pack(fill='x')
@@ -221,21 +221,21 @@ class SettingsView(ctk.CTkFrame):
         fc.grid(row=0, column=0, padx=4, sticky='ew')
         ctk.CTkLabel(fc, text="Country", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.sel_country = ctk.CTkOptionMenu(fc, values=list(LOCATION_DATA.keys()), command=self.on_country_selected,
-                                             fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"], dropdown_fg_color=C["card"], font=F["xs"], corner_radius=8, height=34)
+                                             fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"], dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["xs"], corner_radius=8, height=34)
         self.sel_country.pack(fill='x')
         
         fs = ctk.CTkFrame(drop_grid, fg_color="transparent")
         fs.grid(row=0, column=1, padx=4, sticky='ew')
         ctk.CTkLabel(fs, text="State", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.sel_state = ctk.CTkOptionMenu(fs, values=["Select State"], command=self.on_state_selected,
-                                           fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"], dropdown_fg_color=C["card"], font=F["xs"], corner_radius=8, height=34)
+                                           fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"], dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["xs"], corner_radius=8, height=34)
         self.sel_state.pack(fill='x')
         
         fcy = ctk.CTkFrame(drop_grid, fg_color="transparent")
         fcy.grid(row=0, column=2, padx=4, sticky='ew')
         ctk.CTkLabel(fcy, text="City", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.sel_city = ctk.CTkOptionMenu(fcy, values=["Select City"],
-                                          fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"], dropdown_fg_color=C["card"], font=F["xs"], corner_radius=8, height=34)
+                                          fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"], dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["xs"], corner_radius=8, height=34)
         self.sel_city.pack(fill='x')
         
         self.sel_country.set("India")
@@ -259,7 +259,7 @@ class SettingsView(ctk.CTkFrame):
         
         self.sw_safe_mode = ctk.CTkSwitch(safe_frame, text="  Enable Account Safety Mode (Daily Cap & Human Emulation Delays)",
                                          progress_color=C["accent"], button_color=C["text"],
-                                         button_hover_color=C["accent_h"], text_color=C["text"], font=F["sm_b"])
+                                         button_hover_color=C["accent_h"], text_color=C["ink"], font=F["sm_b"])
         self.sw_safe_mode.pack(anchor='w', pady=4)
         if CONFIG["settings"].get("safe_mode", True):
             self.sw_safe_mode.select()
@@ -296,7 +296,7 @@ class SettingsView(ctk.CTkFrame):
         f_exp.grid(row=0, column=0, padx=5, sticky='ew')
         ctk.CTkLabel(f_exp, text="Experience Level", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         self.sel_exp = ctk.CTkOptionMenu(f_exp, values=["All", "Fresher", "Mid", "Senior"],
-                                        fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"], dropdown_fg_color=C["card"], font=F["xs"], corner_radius=8, height=34)
+                                        fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"], dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["xs"], corner_radius=8, height=34)
         self.sel_exp.pack(fill='x')
         self.sel_exp.set(CONFIG["settings"].get("experience_level", "All"))
         
@@ -304,7 +304,7 @@ class SettingsView(ctk.CTkFrame):
         f_jt.grid(row=0, column=1, padx=5, sticky='ew')
         ctk.CTkLabel(f_jt, text="Job Type", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         self.sel_jt = ctk.CTkOptionMenu(f_jt, values=["All", "Full-time", "Internship", "Contract"],
-                                       fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"], dropdown_fg_color=C["card"], font=F["xs"], corner_radius=8, height=34)
+                                       fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"], dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["xs"], corner_radius=8, height=34)
         self.sel_jt.pack(fill='x')
         self.sel_jt.set(CONFIG["settings"].get("job_type", "All"))
         
@@ -312,7 +312,7 @@ class SettingsView(ctk.CTkFrame):
         f_loc.grid(row=0, column=2, padx=5, sticky='ew')
         ctk.CTkLabel(f_loc, text="Location Mode", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 4))
         self.sel_loc = ctk.CTkOptionMenu(f_loc, values=["All", "Remote", "On-site", "Hybrid"],
-                                        fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"], dropdown_fg_color=C["card"], font=F["xs"], corner_radius=8, height=34)
+                                        fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"], dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["xs"], corner_radius=8, height=34)
         self.sel_loc.pack(fill='x')
         self.sel_loc.set(CONFIG["settings"].get("location_type", "All"))
         
@@ -329,7 +329,7 @@ class SettingsView(ctk.CTkFrame):
             is_on = plat in CONFIG["settings"].get("target_platforms", [])
             sw = ctk.CTkSwitch(plat_frame, text=f"  {plat}",
                                progress_color=C["accent"], button_color=C["text"],
-                               button_hover_color=C["accent_h"], text_color=C["text"],
+                               button_hover_color=C["accent_h"], text_color=C["ink"],
                                font=F["sm"])
             sw.pack(anchor='w', pady=4)
             if is_on: sw.select()

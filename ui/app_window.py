@@ -9,7 +9,7 @@ import core.state as state
 from core.config_manager import CONFIG, CONFIG_PATH, get_model_name, get_active_model_display
 from core.db_manager import APPLIED_DB_PATH, recalculate_metrics
 from automation.llm_evaluator import check_live_ai_status
-from ui.components import C, F, configure_treeview_style
+from ui.components import C, F, configure_treeview_style, animate_fade_color, animate_view_transition
 from ui.dashboard_view import DashboardView
 from ui.history_view import HistoryView
 from ui.suggestions_view import SuggestionsView
@@ -46,7 +46,7 @@ class AppWindow(ctk.CTk):
         brand_row = ctk.CTkFrame(logo_frame, fg_color="transparent")
         brand_row.pack(anchor='w')
         
-        logo_icon = ctk.CTkLabel(brand_row, text="◆", font=("Georgia", 14), text_color=C["ink"])
+        logo_icon = ctk.CTkLabel(brand_row, text="◆", font=("Segoe UI", 13, "bold"), text_color=C["ink"])
         logo_icon.pack(side='left', padx=(0, 6))
         logo_text = ctk.CTkLabel(brand_row, text="VENTURE", font=F["logo"], text_color=C["ink"])
         logo_text.pack(side='left')
@@ -142,66 +142,81 @@ class AppWindow(ctk.CTk):
     def _apply_ai_status(self, status_text, is_online):
         if hasattr(self, 'ind_qwen'):
             ind_color = C["green"] if is_online else C["red"]
-            self.ind_qwen.configure(text=f"● AI: {status_text}", text_color=ind_color)
+            self.ind_qwen.configure(text=f"  {status_text}", text_color=ind_color)
 
     def create_top_navbar(self):
+        # ── Top bar card: title row + slim status strip ──
         self.top_bar = ctk.CTkFrame(
             self.container, fg_color=C["card"], corner_radius=10,
-            border_width=1, border_color=C["border"], height=44
+            border_width=1, border_color=C["border"]
         )
         self.top_bar.pack(fill='x', pady=(0, 16))
-        self.top_bar.pack_propagate(False)
-        
-        status_f = ctk.CTkFrame(self.top_bar, fg_color="transparent")
-        status_f.pack(side='left', padx=14, fill='y')
-        
-        self.ind_qwen = ctk.CTkLabel(
-            status_f, text="● Checking AI...",
-            font=F["xs_b"], text_color=C["dim"], cursor="hand2"
-        )
-        self.ind_qwen.pack(side='left', padx=(0, 16), pady=11)
-        self.ind_qwen.bind("<Button-1>", lambda e: self.show_view('settings'))
-        
-        self._update_ai_status_async()
-        
-        self.ind_edge = ctk.CTkLabel(
-            status_f, text="● Edge: Connected",
-            font=F["xs_b"], text_color=C["muted"]
-        )
-        self.ind_edge.pack(side='left', padx=(0, 16), pady=11)
-        
-        self.ind_db = ctk.CTkLabel(
-            status_f, text="● SQLite: Synced",
-            font=F["xs_b"], text_color=C["blue"]
-        )
-        self.ind_db.pack(side='left', pady=11)
 
-        # Right Side Version Badge
-        v_frame = ctk.CTkFrame(self.top_bar, fg_color="transparent")
-        v_frame.pack(side='right', padx=14, fill='y')
+        # Title row (32px)
+        title_row = ctk.CTkFrame(self.top_bar, fg_color="transparent", height=32)
+        title_row.pack(fill='x', padx=14, pady=(6, 0))
+        title_row.pack_propagate(False)
 
+        self.nav_title_lbl = ctk.CTkLabel(
+            title_row, text="VENTURE", font=F["sm_b"], text_color=C["charcoal"], anchor="w"
+        )
+        self.nav_title_lbl.pack(side='left', fill='y')
+
+        # Right: version chip
         badge = ctk.CTkLabel(
-            v_frame, text="  v3.0 · Editorial  ",
-            fg_color=C["elevated"], text_color=C["ash"],
-            font=F["xs"], corner_radius=9999, height=22
+            title_row, text="  v3.0  ",
+            fg_color=C["elevated"], text_color=C["muted"],
+            font=F["xs"], corner_radius=4, height=18
         )
-        badge.pack(side='right', pady=11)
+        badge.pack(side='right', pady=7)
+
+        # Status strip (24px) — VS Code-style, flush bottom of card
+        self.status_strip = ctk.CTkFrame(
+            self.top_bar, fg_color=C["deep"], corner_radius=0, height=24
+        )
+        self.status_strip.pack(fill='x', pady=(4, 0), side='bottom')
+        self.status_strip.pack_propagate(False)
+
+        # Segment helper: [label_text  value_text] | divider | ...
+        def _seg(label, value, color, clickable=False):
+            f = ctk.CTkFrame(self.status_strip, fg_color="transparent")
+            f.pack(side='left', fill='y', padx=(10, 0))
+            ctk.CTkLabel(f, text=label, font=F["xs_b"], text_color=C["muted"]).pack(side='left', pady=4)
+            val_lbl = ctk.CTkLabel(f, text=f"  {value}", font=F["xs"], text_color=color)
+            val_lbl.pack(side='left', pady=4)
+            # divider
+            ctk.CTkFrame(self.status_strip, fg_color=C["hairline_strong"], width=1, corner_radius=0).pack(
+                side='left', fill='y', padx=(10, 0), pady=5)
+            return val_lbl
+
+        self.ind_qwen = _seg("AI", "Checking...", C["dim"])
+        self.ind_qwen.bind("<Button-1>", lambda e: self.show_view('settings'))
+        self.ind_qwen.configure(cursor="hand2")
+
+        self.ind_edge = _seg("Edge", "Connected", C["muted"])
+        self.ind_db   = _seg("SQLite", "Synced", C["blue"])
+
+        self._update_ai_status_async()
         
     def show_view(self, name):
         self.current_view = name
-        for v in self.views.values():
-            v.pack_forget()
-        self.views[name].pack(fill='both', expand=True)
-        self.refresh_nav_buttons()
-        
-        if name == 'history':
-            self.views['history'].load_history_table()
-        elif name == 'suggestions':
-            self.views['suggestions'].load_suggestions_table()
-        elif name == 'approvals':
-            self.views['approvals'].load_approvals_table()
-        elif name == 'contacts':
-            self.views['contacts'].load_contacts_table()
+
+        def _switch():
+            for v in self.views.values():
+                v.pack_forget()
+            self.views[name].pack(fill='both', expand=True)
+            self.refresh_nav_buttons()
+
+            if name == 'history':
+                self.views['history'].load_history_table()
+            elif name == 'suggestions':
+                self.views['suggestions'].load_suggestions_table()
+            elif name == 'approvals':
+                self.views['approvals'].load_approvals_table()
+            elif name == 'contacts':
+                self.views['contacts'].load_contacts_table()
+
+        animate_view_transition(self.container, _switch)
 
     def refresh_nav_buttons(self):
         doubt_count = len(state.DOUBT_QUEUE)
@@ -295,15 +310,15 @@ class AppWindow(ctk.CTk):
         if state.BOT_PAUSED:
             self.status_var.set("Status: Paused")
             self.status_dot.configure(text_color=C["amber"])
-            self.ind_edge.configure(text="● Edge: Paused", text_color=C["amber"])
+            self.ind_edge.configure(text="  Paused", text_color=C["amber"])
         elif state.BOT_RUNNING:
             self.status_var.set(f"Status: {state.CURRENT_STATUS}")
             self.status_dot.configure(text_color=C["green"])
-            self.ind_edge.configure(text="● Edge: Active", text_color=C["green"])
+            self.ind_edge.configure(text="  Active", text_color=C["green"])
         else:
             self.status_var.set("Status: Idle")
             self.status_dot.configure(text_color=C["dim"])
-            self.ind_edge.configure(text="● Edge: Idle", text_color=C["dim"])
+            self.ind_edge.configure(text="  Idle", text_color=C["dim"])
             
         self.refresh_nav_buttons()
         self.after(1000, self.update_gui_loop)

@@ -70,8 +70,8 @@ class ProfileView(ctk.CTkFrame):
         f_notice.grid(row=0, column=1, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_notice, text="Notice Period", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.qa_notice = ctk.CTkOptionMenu(f_notice, values=["Immediate", "15 Days", "30 Days", "45 Days", "60 Days", "90 Days"],
-                                           fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"],
-                                           dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                           fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
+                                           dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_notice.pack(fill='x')
         
         # Current CTC & Expected CTC - Numeric Entry
@@ -85,8 +85,8 @@ class ProfileView(ctk.CTkFrame):
         f_pref.grid(row=2, column=1, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_pref, text="Work Preference / Mode", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.qa_pref = ctk.CTkOptionMenu(f_pref, values=["Remote", "Hybrid", "On-site", "Flexible"],
-                                         fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"],
-                                         dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                         fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
+                                         dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_pref.pack(fill='x')
         
         # Work Authorization & Require Sponsorship
@@ -94,16 +94,16 @@ class ProfileView(ctk.CTkFrame):
         f_auth.grid(row=3, column=0, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_auth, text="Authorized to Work?", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.qa_auth = ctk.CTkOptionMenu(f_auth, values=["Yes", "No"],
-                                         fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"],
-                                         dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                         fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
+                                         dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_auth.pack(fill='x')
 
         f_spons = ctk.CTkFrame(grid_qa, fg_color="transparent")
         f_spons.grid(row=3, column=1, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_spons, text="Require Visa Sponsorship?", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.qa_spons = ctk.CTkOptionMenu(f_spons, values=["No", "Yes"],
-                                          fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"],
-                                          dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                          fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
+                                          dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_spons.pack(fill='x')
         
         # Relocation & Gender
@@ -111,16 +111,16 @@ class ProfileView(ctk.CTkFrame):
         f_reloc.grid(row=4, column=0, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_reloc, text="Willing to Relocate?", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.qa_reloc = ctk.CTkOptionMenu(f_reloc, values=["Yes", "No"],
-                                          fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"],
-                                          dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                          fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
+                                          dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_reloc.pack(fill='x')
 
         f_gender = ctk.CTkFrame(grid_qa, fg_color="transparent")
         f_gender.grid(row=4, column=1, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_gender, text="Gender", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
         self.qa_gender = ctk.CTkOptionMenu(f_gender, values=["Decline to state", "Male", "Female", "Non-binary", "Other"],
-                                           fg_color=C["input"], button_color=C["card_hover"], text_color=C["text"],
-                                           dropdown_fg_color=C["card"], font=F["sm"], corner_radius=8, height=36)
+                                           fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
+                                           dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_gender.pack(fill='x')
         
         # ── Education & Academic Scores ──
