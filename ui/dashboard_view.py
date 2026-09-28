@@ -77,17 +77,17 @@ class DashboardView(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
 
-        # ── 1. Central Hero: "Venture Status" Card with Strong Hierarchy ──
+        # ── 1. Central Hero: "Venture Status" Card (Compressed Layout) ──
         self.hero_card = ctk.CTkFrame(
             self, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"]
         )
-        self.hero_card.pack(fill='x', pady=(0, 14))
+        self.hero_card.pack(fill='x', pady=(0, 10))
 
         hero_inner = ctk.CTkFrame(self.hero_card, fg_color="transparent")
-        hero_inner.pack(fill='x', padx=20, pady=18)
+        hero_inner.pack(fill='x', padx=16, pady=10)
 
-        # Left: Clean 3-tier hierarchy (Title -> Concept -> Telemetry)
+        # Left: Clean 2-row compact layout
         hero_left = ctk.CTkFrame(hero_inner, fg_color="transparent")
         hero_left.pack(side='left', fill='both', expand=True)
 
@@ -95,14 +95,14 @@ class DashboardView(ctk.CTkFrame):
         status_header_row.pack(anchor='w')
 
         self.hero_status_dot = ctk.CTkLabel(
-            status_header_row, text="●", font=("Arial", 11),
-            text_color=C["dim"], width=14
+            status_header_row, text="●", font=("Arial", 10),
+            text_color=C["dim"], width=12
         )
-        self.hero_status_dot.pack(side='left', padx=(0, 8))
+        self.hero_status_dot.pack(side='left', padx=(0, 6))
 
         self.hero_status_title = ctk.CTkLabel(
             status_header_row, text="VENTURE STANDBY",
-            font=("Segoe UI", 18, "bold"), text_color=C["text"], anchor="w"
+            font=("Segoe UI", 16, "bold"), text_color=C["text"], anchor="w"
         )
         self.hero_status_title.pack(side='left')
 
@@ -110,22 +110,27 @@ class DashboardView(ctk.CTkFrame):
             status_header_row, text="", font=F["mono_sm"],
             text_color=C["secondary"], anchor="w"
         )
-        self.hero_runtime_lbl.pack(side='left', padx=(12, 0))
+        self.hero_runtime_lbl.pack(side='left', padx=(10, 0))
+
+        # Compact telemetry subline
+        sub_row = ctk.CTkFrame(hero_left, fg_color="transparent")
+        sub_row.pack(anchor='w', pady=(2, 0))
 
         self.hero_sub_primary = ctk.CTkLabel(
-            hero_left,
-            text="Autonomous career engine",
-            font=F["body"], text_color=C["body"], anchor="w"
+            sub_row, text="Autonomous career engine",
+            font=F["xs"], text_color=C["body"], anchor="w"
         )
-        self.hero_sub_primary.pack(anchor='w', pady=(4, 0))
+        self.hero_sub_primary.pack(side='left')
+
+        self.hero_sub_sep = ctk.CTkLabel(sub_row, text=" · ", font=F["xs"], text_color=C["tertiary"])
+        self.hero_sub_sep.pack(side='left')
 
         num_sources = len(CONFIG.get("settings", {}).get("target_platforms", [])) + len(CONFIG.get("settings", {}).get("company_career_pages", []))
         self.hero_sub_secondary = ctk.CTkLabel(
-            hero_left,
-            text=f"{num_sources} sources armed · 0 evaluated",
+            sub_row, text=f"{num_sources} sources armed · 0 evaluated",
             font=F["xs"], text_color=C["tertiary"], anchor="w"
         )
-        self.hero_sub_secondary.pack(anchor='w', pady=(2, 0))
+        self.hero_sub_secondary.pack(side='left')
 
         # Right: Restrained Action Controls
         hero_right = ctk.CTkFrame(hero_inner, fg_color="transparent")
@@ -148,7 +153,7 @@ class DashboardView(ctk.CTkFrame):
 
         # ── 2. Metric Cards Row with Differentiated Hierarchy ──
         metrics_frame = ctk.CTkFrame(self, fg_color="transparent")
-        metrics_frame.pack(fill='x', pady=(0, 12))
+        metrics_frame.pack(fill='x', pady=(0, 10))
         metrics_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="equal")
 
         min_score = CONFIG.get("settings", {}).get("min_score", 70)
@@ -164,7 +169,7 @@ class DashboardView(ctk.CTkFrame):
             self, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"], height=46
         )
-        self.pipeline_card.pack(fill='x', pady=(0, 14))
+        self.pipeline_card.pack(fill='x', pady=(0, 10))
         self.pipeline_card.pack_propagate(False)
 
         self.pipeline_canvas = tk.Canvas(
@@ -264,9 +269,10 @@ class DashboardView(ctk.CTkFrame):
         )
         self.chat_history.pack(fill='both', expand=True, padx=8, pady=8)
 
-        # Quick action chips row
+        # Quick action chips 2x2 grid
         self.quick_chips_frame = ctk.CTkFrame(chat_card, fg_color="transparent")
-        self.quick_chips_frame.pack(fill='x', padx=12, pady=(0, 8))
+        self.quick_chips_frame.pack(fill='x', padx=12, pady=(0, 10))
+        self.quick_chips_frame.columnconfigure((0, 1), weight=1, uniform="chip")
 
         quick_prompts = [
             ("Find opportunities", "Search for new matching opportunities"),
@@ -274,16 +280,21 @@ class DashboardView(ctk.CTkFrame):
             ("Resume analysis",    "Analyze strengths and gaps in my resume"),
             ("Pipeline stats",     "Give me an executive summary of the pipeline"),
         ]
+        row, col = 0, 0
         for label, prompt in quick_prompts:
             btn = ctk.CTkButton(
                 self.quick_chips_frame, text=label,
                 font=F["xs"], fg_color=C["elevated"],
                 hover_color=C["card_hover"], text_color=C["secondary"],
                 border_width=1, border_color=C["border"],
-                corner_radius=4, height=24,
+                corner_radius=4, height=26,
                 cursor="hand2", command=lambda p=prompt: self._inject_quick_prompt(p)
             )
-            btn.pack(side='left', padx=(0, 6))
+            btn.grid(row=row, column=col, padx=3, pady=2, sticky='ew')
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
 
         # Chat input row
         input_row = ctk.CTkFrame(chat_card, fg_color="transparent")
@@ -306,34 +317,30 @@ class DashboardView(ctk.CTkFrame):
         self._seed_initial_activity()
         self._seed_initial_chat()
 
-    # ── Differentiated Metric Card Builder ──
+    # ── Differentiated Metric Card Builder (Compact Engineering Design) ──
     def create_metric_card(self, parent, label, val, col, subtext="", prominent=False):
         border_col = C["border"] if prominent else C["hairline"]
         card = ctk.CTkFrame(
             parent, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=border_col
         )
-        card.grid(row=0, column=col, sticky='nsew', padx=4, pady=0)
+        card.grid(row=0, column=col, sticky='nsew', padx=3, pady=0)
 
-        val_font = ("Segoe UI", 26, "bold") if prominent else ("Segoe UI", 20, "bold")
+        val_font = ("Segoe UI", 20, "bold") if prominent else ("Segoe UI", 17, "bold")
         val_color = C["text"] if prominent else C["secondary"]
         lbl_color = C["secondary"] if prominent else C["tertiary"]
 
         lbl_val = ctk.CTkLabel(card, text=val, font=val_font, text_color=val_color, anchor="w")
-        lbl_val.pack(anchor='w', padx=14, pady=(12, 0))
+        lbl_val.pack(anchor='w', padx=12, pady=(8, 0))
 
         lbl_lbl = ctk.CTkLabel(card, text=label, font=F["xs_b"], text_color=lbl_color, anchor="w")
-        lbl_lbl.pack(anchor='w', padx=14, pady=(2, 0))
-
-        if prominent:
-            sep = ctk.CTkFrame(card, fg_color=C["hairline_strong"], height=1)
-            sep.pack(fill='x', padx=14, pady=(6, 4))
-        else:
-            ctk.CTkFrame(card, fg_color="transparent", height=4).pack()
+        lbl_lbl.pack(anchor='w', padx=12, pady=(1, 0))
 
         if subtext:
             lbl_sub = ctk.CTkLabel(card, text=subtext, font=F["xs"], text_color=C["tertiary"], anchor="w")
-            lbl_sub.pack(anchor='w', padx=14, pady=(0, 10))
+            lbl_sub.pack(anchor='w', padx=12, pady=(1, 8))
+        else:
+            ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
 
         return lbl_val
 
@@ -445,20 +452,55 @@ class DashboardView(ctk.CTkFrame):
 
         if state.LOG_QUEUE:
             self.logs_box.delete('1.0', 'end')
-            for log in state.LOG_QUEUE:
-                if not search_query or search_query in log.lower():
-                    ts_match = re.match(r'(\d{2}:\d{2}:\d{2})\s*(.*)', log)
-                    if ts_match:
-                        ts, rest = ts_match.groups()
-                        tag_match = re.match(r'\[(.*?)\]\s*(.*)', rest)
-                        if tag_match:
-                            tag, content = tag_match.groups()
-                            self._append_activity_entry(ts, tag.upper()[:10], content)
-                        else:
-                            self._append_activity_entry(ts, "EVENT", rest)
-                    else:
-                        now_str = datetime.now().strftime("%H:%M:%S")
-                        self._append_activity_entry(now_str, "LOG", log)
+            recent_logs = list(state.LOG_QUEUE)[-120:]
+            for log in recent_logs:
+                if search_query and search_query not in log.lower():
+                    continue
+
+                raw = log.strip()
+                ts = datetime.now().strftime("%H:%M:%S")
+
+                # Match [YYYY-MM-DD HH:MM:SS] or [HH:MM:SS] or bare HH:MM:SS
+                ts_m = re.match(r'\[(?:\d{4}-\d{2}-\d{2}\s+)?(\d{2}:\d{2}:\d{2})\]\s*(.*)', raw)
+                if ts_m:
+                    ts = ts_m.group(1)
+                    raw = ts_m.group(2)
+                else:
+                    bare_m = re.match(r'^(\d{2}:\d{2}:\d{2})\s+(.*)', raw)
+                    if bare_m:
+                        ts = bare_m.group(1)
+                        raw = bare_m.group(2)
+
+                # Match explicit tag [TAG]
+                tag = "SYSTEM"
+                tag_m = re.match(r'\[([A-Za-z0-9_\-\.\s]+)\]\s*(.*)', raw)
+                if tag_m:
+                    tag = tag_m.group(1).upper()
+                    raw = tag_m.group(2)
+                else:
+                    raw_lower = raw.lower()
+                    if "radar" in raw_lower or "scanning" in raw_lower or "jobspy" in raw_lower:
+                        tag = "RADAR"
+                    elif "match" in raw_lower or "fit score" in raw_lower:
+                        tag = "MATCH"
+                    elif "rag" in raw_lower or "embedding" in raw_lower:
+                        tag = "RAG"
+                    elif "pipeline" in raw_lower or "applied" in raw_lower or "queued" in raw_lower:
+                        tag = "PIPELINE"
+                    elif "database" in raw_lower or "sqlite" in raw_lower:
+                        tag = "DATABASE"
+
+                # Strip internal log prefixes
+                clean_msg = raw.replace("INFO - JobSpy:", "").replace("INFO - ", "").replace("WARNING - ", "").strip()
+                self._append_activity_entry(ts, tag[:10], clean_msg)
+
+            self.logs_box.insert('end', "────────────────────────────────────────────────\n", "ts")
+            if state.BOT_RUNNING and state.BOT_PAUSED:
+                self.logs_box.insert('end', "                   PAUSED\n", "ts")
+            elif state.BOT_RUNNING:
+                self.logs_box.insert('end', "                   SCANNING\n", "ts")
+            else:
+                self.logs_box.insert('end', "                   SYSTEM IDLE\n", "ts")
             self.logs_box.see('end')
 
     # ── AI Console Logic (Agentic & Calm Personality) ──

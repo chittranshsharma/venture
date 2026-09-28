@@ -510,24 +510,41 @@ def get_applications_history():
     return records
 
 def get_suggested_jobs():
-    """Load suggested jobs for Suggestions View table."""
+    """Load suggested jobs and evaluated opportunities for Suggestions View."""
     records = []
     with DB_LOCK:
         try:
             with _get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT url, company, title, reason 
+                    SELECT url, company, title, reason, platform, score, strengths, gaps 
                     FROM applications 
-                    WHERE status = 'Suggested'
-                    ORDER BY id DESC
+                    ORDER BY score DESC, id DESC
                 """)
                 for row in cursor.fetchall():
+                    strengths_list = []
+                    if row[6]:
+                        try:
+                            strengths_list = json.loads(row[6]) if isinstance(row[6], str) else row[6]
+                        except Exception:
+                            strengths_list = []
+
+                    gaps_list = []
+                    if row[7]:
+                        try:
+                            gaps_list = json.loads(row[7]) if isinstance(row[7], str) else row[7]
+                        except Exception:
+                            gaps_list = []
+
                     records.append({
                         "url": row[0],
                         "company": row[1] or "Unknown Company",
                         "role": row[2] or "Unknown Role",
-                        "detail": row[3] or ""
+                        "detail": row[3] or "",
+                        "platform": row[4] or "LinkedIn",
+                        "score": row[5] or 0,
+                        "strengths": strengths_list,
+                        "gaps": gaps_list
                     })
         except Exception as e:
             log_message(f"Error fetching suggestions: {e}")
