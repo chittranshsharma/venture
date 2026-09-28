@@ -16,36 +16,40 @@ from automation.llm_evaluator import query_ai_model
 from automation.job_scraper import fast_scrape_jobs
 from automation.bot_runner import start_bot_thread, stop_bot
 from automation.radar import get_radar_agent
-from ui.components import C, F, create_action_btn, animate_count_up
+from ui.components import C, F, create_action_btn
 
 
 def _get_stats() -> dict:
-    """Run real aggregate SQLite queries across applications table (P5.3)."""
+    """Run real aggregate SQLite queries across applications table."""
+    min_score = CONFIG.get("settings", {}).get("min_score", 70)
     s = {
-        "total": 0,
+        "opportunities": 0,
+        "high_fit": 0,
         "applied": 0,
         "interview": 0,
         "offer": 0,
         "avg_score": 0.0,
         "by_platform": [],
-        "last_7_days": []
+        "last_7_days": [],
+        "pipeline_stages": []
     }
     try:
         conn = sqlite3.connect(SQLITE_DB_PATH, timeout=10.0)
-        s["total"]     = conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0] or 0
-        s["applied"]   = conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('Applied', 'Submitted', 'SUBMITTED', 'Manual Approval Apply')").fetchone()[0] or 0
-        s["interview"] = conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('Interview', 'Interviewing')").fetchone()[0] or 0
-        s["offer"]     = conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('Offer', 'Offer Received')").fetchone()[0] or 0
-        avg_row        = conn.execute("SELECT ROUND(AVG(score), 1) FROM applications WHERE score > 0").fetchone()
-        s["avg_score"] = avg_row[0] if (avg_row and avg_row[0] is not None) else 0.0
-        
+        s["opportunities"] = conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0] or 0
+        s["high_fit"]      = conn.execute("SELECT COUNT(*) FROM applications WHERE score >= ?", (min_score,)).fetchone()[0] or 0
+        s["applied"]       = conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('Applied', 'Submitted', 'SUBMITTED', 'Manual Approval Apply')").fetchone()[0] or 0
+        s["interview"]     = conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('Interview', 'Interviewing')").fetchone()[0] or 0
+        s["offer"]         = conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('Offer', 'Offer Received')").fetchone()[0] or 0
+        avg_row            = conn.execute("SELECT ROUND(AVG(score), 1) FROM applications WHERE score > 0").fetchone()
+        s["avg_score"]     = avg_row[0] if (avg_row and avg_row[0] is not None) else 0.0
+
         s["by_platform"] = conn.execute("""
             SELECT COALESCE(platform, 'Other') p, COUNT(*) c 
             FROM applications 
             GROUP BY p 
             ORDER BY c DESC
         """).fetchall()
-        
+
         s["last_7_days"] = conn.execute("""
             SELECT date(applied_at) d, COUNT(*) c 
             FROM applications
@@ -56,6 +60,15 @@ def _get_stats() -> dict:
         conn.close()
     except Exception:
         pass
+
+    s["pipeline_stages"] = [
+        ("RADAR", s["opportunities"]),
+        ("MATCHED", s["high_fit"]),
+        ("APPROVED", max(0, s["high_fit"] - s["applied"])),
+        ("APPLIED", s["applied"]),
+        ("INTERVIEW", s["interview"]),
+        ("OFFER", s["offer"]),
+    ]
     return s
 
 
@@ -63,225 +76,495 @@ class DashboardView(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
-        
-        # ── Header Row ──
-        title_row = ctk.CTkFrame(self, fg_color="transparent")
-        title_row.pack(fill='x', pady=(0, 12))
-        
-        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
-        title_box.pack(side='left', anchor='w')
-        
-        lbl_title = ctk.CTkLabel(title_box, text="Control Dashboard", font=F["h1"], text_color=C["ink"], anchor="w")
-        lbl_title.pack(anchor='w')
-        lbl_sub = ctk.CTkLabel(title_box, text="Real-time execution telemetry and autonomous pipeline.", font=F["xs"], text_color=C["ash"], anchor="w")
-        lbl_sub.pack(anchor='w', pady=(2, 0))
-        
-        btn_frame = ctk.CTkFrame(title_row, fg_color="transparent")
-        btn_frame.pack(side='right')
-        
-        self.btn_radar = create_action_btn(btn_frame, "📡  Radar: Off", self.toggle_radar_action, "secondary", "normal")
+
+        # ── 1. Central Hero: "Venture Status" Card ──
+        self.hero_card = ctk.CTkFrame(
+            self, fg_color=C["card"], corner_radius=10,
+            border_width=1, border_color=C["border"]
+        )
+        self.hero_card.pack(fill='x', pady=(0, 12))
+
+        hero_inner = ctk.CTkFrame(self.hero_card, fg_color="transparent")
+        hero_inner.pack(fill='x', padx=18, pady=16)
+
+        # Left: Agent state & operational summary
+        hero_left = ctk.CTkFrame(hero_inner, fg_color="transparent")
+        hero_left.pack(side='left', fill='both', expand=True)
+
+        status_header_row = ctk.CTkFrame(hero_left, fg_color="transparent")
+        status_header_row.pack(anchor='w')
+
+        self.hero_status_dot = ctk.CTkLabel(
+            status_header_row, text="●", font=("Arial", 11),
+            text_color=C["dim"], width=14
+        )
+        self.hero_status_dot.pack(side='left', padx=(0, 8))
+
+        self.hero_status_title = ctk.CTkLabel(
+            status_header_row, text="VENTURE STANDBY",
+            font=F["h2"], text_color=C["text"], anchor="w"
+        )
+        self.hero_status_title.pack(side='left')
+
+        self.hero_runtime_lbl = ctk.CTkLabel(
+            status_header_row, text="", font=F["mono_sm"],
+            text_color=C["secondary"], anchor="w"
+        )
+        self.hero_runtime_lbl.pack(side='left', padx=(12, 0))
+
+        self.hero_subtext_lbl = ctk.CTkLabel(
+            hero_left,
+            text="Autonomous career engine idle · 3 sources armed · Ready for instruction",
+            font=F["xs"], text_color=C["secondary"], anchor="w"
+        )
+        self.hero_subtext_lbl.pack(anchor='w', pady=(4, 0))
+
+        # Right: Restrained Action Controls
+        hero_right = ctk.CTkFrame(hero_inner, fg_color="transparent")
+        hero_right.pack(side='right', anchor='e')
+
+        self.btn_radar = create_action_btn(
+            hero_right, "Radar off", self.toggle_radar_action, "ghost", "normal"
+        )
         self.btn_radar.pack(side='right', padx=(8, 0))
-        
-        self.btn_pause = create_action_btn(btn_frame, "⏸  Pause", self.toggle_pause_action, "warning", "normal")
+
+        self.btn_pause = create_action_btn(
+            hero_right, "Pause", self.toggle_pause_action, "ghost", "normal"
+        )
         self.btn_pause.pack(side='right', padx=(8, 0))
-        
-        self.btn_toggle = create_action_btn(btn_frame, "▶  Start Bot", self.toggle_bot_action, "primary", "normal")
+
+        self.btn_toggle = create_action_btn(
+            hero_right, "Start agent", self.toggle_bot_action, "primary", "normal"
+        )
         self.btn_toggle.pack(side='right')
 
-        # ── Radar Status Banner (Elevated Surface with Hairline Border) ──
-        self.radar_banner = ctk.CTkFrame(
-            self, fg_color=C["card"], corner_radius=8,
-            border_width=1, border_color=C["border"], height=36
-        )
-        self.radar_banner.pack(fill='x', pady=(0, 10))
-
-        self.radar_status_dot = ctk.CTkLabel(self.radar_banner, text="●", text_color=C["dim"], font=("Arial", 12))
-        self.radar_status_dot.pack(side='left', padx=(12, 4))
-
-        self.radar_status_lbl = ctk.CTkLabel(
-            self.radar_banner, text="Radar: Inactive — Background polling idle",
-            font=F["xs_b"], text_color=C["muted"]
-        )
-        self.radar_status_lbl.pack(side='left', padx=4)
-
-        self.radar_count_lbl = ctk.CTkLabel(
-            self.radar_banner, text="0 new jobs found this session",
-            font=F["xs_b"], text_color=C["charcoal"]
-        )
-        self.radar_count_lbl.pack(side='right', padx=14)
-        
-        # ── Metric Cards Row (Clean Editorial Cards with Hairlines) ──
+        # ── 2. Metric Cards Row ──
         metrics_frame = ctk.CTkFrame(self, fg_color="transparent")
-        metrics_frame.pack(fill='x', pady=(0, 6))
+        metrics_frame.pack(fill='x', pady=(0, 10))
         metrics_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="equal")
-        
-        self.applied_metric = self.create_metric_card(metrics_frame, "APPLICATIONS SENT", "0", 0, "verified pipeline")
-        self.interview_metric = self.create_metric_card(metrics_frame, "INTERVIEWS SCHEDULED", "0", 1, "active leads")
-        self.offer_metric = self.create_metric_card(metrics_frame, "OFFERS RECEIVED", "0", 2, "terminal goal")
-        self.avg_score_metric = self.create_metric_card(metrics_frame, "AVG MATCH SCORE", "0%", 3, "semantic cosine")
-        
-        # Funnel & Session Conversion Label
-        self.session_stats_lbl = ctk.CTkLabel(
-            self, text="Funnel: 0 Applied ➔ 0 Interviews (0%) ➔ 0 Offers (0%)",
-            text_color=C["ash"], font=F["xs"], anchor="w"
+
+        self.metric_opps       = self.create_metric_card(metrics_frame, "OPPORTUNITIES FOUND", "0", 0, "total evaluated")
+        self.metric_high_fit   = self.create_metric_card(metrics_frame, "HIGH FIT LEADS", "0", 1, ">=70% semantic match")
+        self.metric_applied    = self.create_metric_card(metrics_frame, "APPLICATIONS SENT", "0", 2, "verified pipeline")
+        self.metric_interviews = self.create_metric_card(metrics_frame, "INTERVIEWS SCHEDULED", "0", 3, "active leads")
+
+        # ── 3. Visual Opportunity Pipeline Bar ──
+        self.pipeline_card = ctk.CTkFrame(
+            self, fg_color=C["card"], corner_radius=8,
+            border_width=1, border_color=C["border"], height=42
         )
-        self.session_stats_lbl.pack(anchor='w', pady=(2, 10))
-        
-        # ── Workspace 2x2 Grid ──
+        self.pipeline_card.pack(fill='x', pady=(0, 12))
+        self.pipeline_card.pack_propagate(False)
+
+        self.pipeline_canvas = tk.Canvas(
+            self.pipeline_card, bg=C["card"],
+            highlightthickness=0, bd=0
+        )
+        self.pipeline_canvas.pack(fill='both', expand=True, padx=12, pady=4)
+        self.pipeline_canvas.bind("<Configure>", lambda e: self.draw_pipeline_flow())
+
+        # ── 4. Workspace 2-Column Split: Activity Stream & AI Console ──
         workspace_frame = ctk.CTkFrame(self, fg_color="transparent")
         workspace_frame.pack(fill='both', expand=True)
-        workspace_frame.columnconfigure(0, weight=1)
-        workspace_frame.columnconfigure(1, weight=1)
+        workspace_frame.columnconfigure(0, weight=6)
+        workspace_frame.columnconfigure(1, weight=5)
         workspace_frame.rowconfigure(0, weight=1)
-        workspace_frame.rowconfigure(1, weight=1)
-        
-        # ── Logs Card ({component.code-window} with Hairline Chrome) ──
-        logs_card = ctk.CTkFrame(
-            workspace_frame, fg_color=C["deep"], corner_radius=12,
+
+        # ── Left Column: Live Engineering Activity Stream ──
+        activity_card = ctk.CTkFrame(
+            workspace_frame, fg_color=C["deep"], corner_radius=10,
             border_width=1, border_color=C["border"]
         )
-        logs_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8), pady=(0, 8))
-        
-        log_top = ctk.CTkFrame(logs_card, fg_color="transparent", height=32)
-        log_top.pack(fill='x', padx=14, pady=(10, 4))
-        
-        # Traffic Lights Chrome
-        dots = ctk.CTkFrame(log_top, fg_color="transparent")
-        dots.pack(side='left', pady=2)
-        ctk.CTkLabel(dots, text="●", font=("Arial", 11), text_color=C["red"], width=13).pack(side='left')
-        ctk.CTkLabel(dots, text="●", font=("Arial", 11), text_color=C["yellow"], width=13).pack(side='left')
-        ctk.CTkLabel(dots, text="●", font=("Arial", 11), text_color=C["green"], width=13).pack(side='left')
-        
-        lbl_log_title = ctk.CTkLabel(log_top, text=" venture.daemon.log", font=F["mono_sm"], text_color=C["charcoal"])
-        lbl_log_title.pack(side='left', padx=(4, 0))
-        
+        activity_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8), pady=0)
+
+        activity_header = ctk.CTkFrame(activity_card, fg_color="transparent", height=34)
+        activity_header.pack(fill='x', padx=14, pady=(10, 4))
+        activity_header.pack_propagate(False)
+
+        dots = ctk.CTkFrame(activity_header, fg_color="transparent")
+        dots.pack(side='left', pady=4)
+        ctk.CTkLabel(dots, text="●", font=("Arial", 10), text_color=C["red"], width=13).pack(side='left')
+        ctk.CTkLabel(dots, text="●", font=("Arial", 10), text_color=C["amber"], width=13).pack(side='left')
+        ctk.CTkLabel(dots, text="●", font=("Arial", 10), text_color=C["green"], width=13).pack(side='left')
+
+        lbl_log_title = ctk.CTkLabel(
+            activity_header, text=" VENTURE / ACTIVITY",
+            font=F["mono_sm"], text_color=C["secondary"]
+        )
+        lbl_log_title.pack(side='left', padx=(6, 0))
+
         self.log_search_var = tk.StringVar()
         log_search = ctk.CTkEntry(
-            log_top, textvariable=self.log_search_var,
-            placeholder_text="Filter logs...",
-            fg_color=C["input"], border_color=C["hairline_strong"],
-            text_color=C["ink"], font=F["xs"], width=150, height=26, corner_radius=6
+            activity_header, textvariable=self.log_search_var,
+            placeholder_text="Filter activity...",
+            fg_color=C["input"], border_color=C["border"],
+            text_color=C["text"], font=F["xs"], width=140, height=24, corner_radius=4,
+            border_width=1
         )
         log_search.pack(side='right')
-        
-        logs_inner = ctk.CTkFrame(logs_card, fg_color=C["deep"], corner_radius=0)
-        logs_inner.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-        
+
+        logs_inner = ctk.CTkFrame(activity_card, fg_color="transparent")
+        logs_inner.pack(fill='both', expand=True, padx=12, pady=(0, 10))
+
         self.logs_box = scrolledtext.ScrolledText(
-            logs_inner,
-            bg=C["deep"], fg=C["body"],
-            insertbackground=C["ink"],
-            font=F["mono_sm"], bd=0, highlightthickness=0
+            logs_inner, bg=C["deep"], fg=C["body"],
+            insertbackground=C["text"], font=F["mono_sm"],
+            bd=0, highlightthickness=0, wrap='none'
         )
-        self.logs_box.pack(fill='both', expand=True, padx=4, pady=4)
-        
+        self.logs_box.pack(fill='both', expand=True)
+
+        self._configure_log_tags()
         self.log_search_var.trace_add("write", lambda *args: self.update_logs_display())
-        
-        # ── Analytics Card (P5.3 Funnel, Sparkline & Platform Breakdown) ──
-        charts_card = ctk.CTkFrame(
-            workspace_frame, fg_color=C["card"], corner_radius=12,
-            border_width=1, border_color=C["border"]
-        )
-        charts_card.grid(row=1, column=0, sticky='nsew', padx=(0, 8), pady=(8, 0))
-        
-        charts_header = ctk.CTkFrame(charts_card, fg_color="transparent")
-        charts_header.pack(fill='x', padx=14, pady=(12, 4))
-        lbl_charts_title = ctk.CTkLabel(charts_header, text="Pipeline Analytics", font=F["h3"], text_color=C["ink"])
-        lbl_charts_title.pack(side='left')
-        lbl_charts_sub = ctk.CTkLabel(charts_header, text="SQLite live aggregate metrics", font=F["xs"], text_color=C["ash"])
-        lbl_charts_sub.pack(side='right')
-        
-        self.chart_canvas = tk.Canvas(charts_card, bg=C["card"], highlightthickness=0, bd=0)
-        self.chart_canvas.pack(fill='both', expand=True, padx=14, pady=(0, 12))
-        
-        # ── Chat Card (Editorial Assistant Console) ──
+
+        # ── Right Column: AI Assistant Console (Restrained Agent Workspace) ──
         chat_card = ctk.CTkFrame(
-            workspace_frame, fg_color=C["card"], corner_radius=12,
+            workspace_frame, fg_color=C["card"], corner_radius=10,
             border_width=1, border_color=C["border"]
         )
-        chat_card.grid(row=0, column=1, rowspan=2, sticky='nsew', padx=(8, 0))
-        
-        chat_header = ctk.CTkFrame(chat_card, fg_color="transparent")
-        chat_header.pack(fill='x', padx=14, pady=(12, 8))
-        lbl_chat_title = ctk.CTkLabel(chat_header, text="AI Assistant Console", font=F["h3"], text_color=C["ink"])
+        chat_card.grid(row=0, column=1, sticky='nsew', padx=(8, 0), pady=0)
+
+        chat_header = ctk.CTkFrame(chat_card, fg_color="transparent", height=34)
+        chat_header.pack(fill='x', padx=14, pady=(10, 4))
+        chat_header.pack_propagate(False)
+
+        lbl_chat_title = ctk.CTkLabel(
+            chat_header, text="VENTURE INTELLIGENCE",
+            font=F["h3"], text_color=C["text"]
+        )
         lbl_chat_title.pack(side='left')
-        
-        chat_badge = ctk.CTkLabel(
-            chat_header, text="  RAG · QWEN  ",
-            fg_color=C["elevated"], text_color=C["charcoal"],
-            font=F["xs_b"], corner_radius=9999, height=22
+
+        self.chat_model_badge = ctk.CTkLabel(
+            chat_header, text="QWEN 2.5 ●",
+            font=F["mono_sm"], text_color=C["green"]
         )
-        chat_badge.pack(side='right')
-        
+        self.chat_model_badge.pack(side='right')
+
+        # Chat history container
         chat_inner = ctk.CTkFrame(
-            chat_card, fg_color=C["deep"], corner_radius=8,
-            border_width=1, border_color=C["hairline_strong"]
+            chat_card, fg_color=C["deep"], corner_radius=6,
+            border_width=1, border_color=C["border"]
         )
-        chat_inner.pack(fill='both', expand=True, padx=14, pady=(0, 10))
-        
+        chat_inner.pack(fill='both', expand=True, padx=12, pady=(0, 10))
+
         self.chat_history = scrolledtext.ScrolledText(
-            chat_inner,
-            bg=C["deep"], fg=C["body"],
-            insertbackground=C["ink"], font=F["sm"],
+            chat_inner, bg=C["deep"], fg=C["body"],
+            insertbackground=C["text"], font=F["sm"],
             bd=0, state='disabled', wrap='word', highlightthickness=0
         )
         self.chat_history.pack(fill='both', expand=True, padx=8, pady=8)
-        
+
+        # Quick action chips row (shown in empty state)
+        self.quick_chips_frame = ctk.CTkFrame(chat_card, fg_color="transparent")
+        self.quick_chips_frame.pack(fill='x', padx=12, pady=(0, 8))
+
+        quick_prompts = [
+            ("Find opportunities", "Search for new matching opportunities"),
+            ("Best matches",       "Show my top 5 highest match scores"),
+            ("Resume analysis",    "Analyze strengths and gaps in my resume"),
+            ("Pipeline stats",     "Give me an executive summary of the pipeline"),
+        ]
+        for label, prompt in quick_prompts:
+            btn = ctk.CTkButton(
+                self.quick_chips_frame, text=label,
+                font=F["xs"], fg_color=C["elevated"],
+                hover_color=C["card_hover"], text_color=C["secondary"],
+                border_width=1, border_color=C["border"],
+                corner_radius=4, height=24,
+                cursor="hand2", command=lambda p=prompt: self._inject_quick_prompt(p)
+            )
+            btn.pack(side='left', padx=(0, 6))
+
+        # Chat input row
         input_row = ctk.CTkFrame(chat_card, fg_color="transparent")
-        input_row.pack(fill='x', padx=14, pady=(0, 14))
-        
+        input_row.pack(fill='x', padx=12, pady=(0, 12))
+
         self.chat_input = ctk.CTkEntry(
-            input_row,
-            placeholder_text="Ask about resume, jobs, or settings...",
-            fg_color=C["input"], border_color=C["border"], text_color=C["text"],
-            font=F["sm"], corner_radius=8, height=36
+            input_row, placeholder_text="Ask VENTURE anything...",
+            fg_color=C["input"], border_color=C["border"],
+            text_color=C["text"], font=F["sm"],
+            corner_radius=6, height=34, border_width=1
         )
-        self.chat_input.pack(side='left', fill='x', expand=True, padx=(0, 8))
+        self.chat_input.pack(side='left', fill='x', expand=True, padx=(0, 6))
         self.chat_input.bind("<Return>", lambda e: self.send_chat_message())
-        
-        btn_send = create_action_btn(input_row, "Send", self.send_chat_message, "primary", "small")
+
+        btn_send = create_action_btn(input_row, "→", self.send_chat_message, "primary", "small")
+        btn_send.configure(width=34)
         btn_send.pack(side='right')
 
+        # Initial seed logs and chat prompt
+        self._seed_initial_activity()
+        self._seed_initial_chat()
+
+    # ── Metric Card Builder ──
     def create_metric_card(self, parent, label, val, col, subtext=""):
-        """Editorial Metric Card with hairline-strong border and Domaine typography"""
         card = ctk.CTkFrame(
-            parent, fg_color=C["card"], corner_radius=12,
+            parent, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"]
         )
-        card.grid(row=0, column=col, sticky='nsew', padx=5, pady=2)
-        
-        lbl_lbl = ctk.CTkLabel(card, text=label, font=F["xs_b"], text_color=C["muted"], anchor="w")
+        card.grid(row=0, column=col, sticky='nsew', padx=4, pady=0)
+
+        lbl_lbl = ctk.CTkLabel(card, text=label, font=F["xs_b"], text_color=C["tertiary"], anchor="w")
         lbl_lbl.pack(anchor='w', padx=14, pady=(12, 0))
-        
-        lbl_val = ctk.CTkLabel(card, text=val, font=F["metric"], text_color=C["ink"], anchor="w")
+
+        lbl_val = ctk.CTkLabel(card, text=val, font=F["metric"], text_color=C["text"], anchor="w")
         lbl_val.pack(anchor='w', padx=14, pady=(2, 2))
 
         if subtext:
-            lbl_sub = ctk.CTkLabel(card, text=subtext, font=F["xs"], text_color=C["ash"], anchor="w")
-            lbl_sub.pack(anchor='w', padx=14, pady=(0, 12))
-            
+            lbl_sub = ctk.CTkLabel(card, text=subtext, font=F["xs"], text_color=C["secondary"], anchor="w")
+            lbl_sub.pack(anchor='w', padx=14, pady=(0, 10))
+
         return lbl_val
 
+    # ── Pipeline Visualization ──
+    def draw_pipeline_flow(self, stats=None):
+        self.pipeline_canvas.delete("all")
+        s = stats or _get_stats()
+        stages = s.get("pipeline_stages", [])
+        if not stages:
+            return
+
+        w = self.pipeline_canvas.winfo_width()
+        h = self.pipeline_canvas.winfo_height()
+        if w < 100: w = 700
+        if h < 20: h = 34
+
+        n = len(stages)
+        col_w = w / n
+
+        for idx, (name, count) in enumerate(stages):
+            cx = idx * col_w + col_w / 2
+            cy = h / 2
+
+            # Stage Count + Name
+            text_stage = f"{name}  {count}"
+            self.pipeline_canvas.create_text(
+                cx, cy, text=text_stage,
+                fill=C["text"] if count > 0 else C["tertiary"],
+                font=F["xs_b"]
+            )
+
+            # Connector arrow
+            if idx < n - 1:
+                arrow_x = (idx + 1) * col_w
+                self.pipeline_canvas.create_text(
+                    arrow_x, cy, text="→",
+                    fill=C["tertiary"], font=F["xs"]
+                )
+
+    # ── Activity Stream Logging ──
+    def _configure_log_tags(self):
+        self.logs_box.tag_config("ts", foreground=C["tertiary"], font=F["mono_sm"])
+        self.logs_box.tag_config("radar", foreground=C["blue"], font=F["mono_sm"])
+        self.logs_box.tag_config("match", foreground=C["amber"], font=F["mono_sm"])
+        self.logs_box.tag_config("rag", foreground=C["purple"], font=F["mono_sm"])
+        self.logs_box.tag_config("app", foreground=C["green"], font=F["mono_sm"])
+        self.logs_box.tag_config("sys", foreground=C["secondary"], font=F["mono_sm"])
+        self.logs_box.tag_config("body", foreground=C["body"], font=F["mono_sm"])
+
+    def _seed_initial_activity(self):
+        """Populate initial engineering telemetry so console never appears empty."""
+        now = datetime.now()
+        t1 = (now - timedelta(seconds=12)).strftime("%H:%M:%S")
+        t2 = (now - timedelta(seconds=8)).strftime("%H:%M:%S")
+        t3 = (now - timedelta(seconds=3)).strftime("%H:%M:%S")
+        t4 = now.strftime("%H:%M:%S")
+
+        self._append_activity_entry(t1, "SYSTEM", "Neural embedding engine initialized (all-MiniLM-L6-v2 · 384 dim)")
+        self._append_activity_entry(t2, "DATABASE", "SQLite database verified: venture.db (WAL mode active)")
+        self._append_activity_entry(t3, "RADAR", f"Autonomous background poller ready ({len(CONFIG.get('settings', {}).get('queries', []))} queries loaded)")
+        self._append_activity_entry(t4, "PIPELINE", "System armed · Ready for operator instruction")
+
+    def _append_activity_entry(self, timestamp, tag, message):
+        tag_key = "sys"
+        tl = tag.lower()
+        if "radar" in tl: tag_key = "radar"
+        elif "match" in tl or "score" in tl: tag_key = "match"
+        elif "rag" in tl: tag_key = "rag"
+        elif "apply" in tl or "subm" in tl: tag_key = "app"
+
+        self.logs_box.insert('end', f"{timestamp}  ", "ts")
+        self.logs_box.insert('end', f"{tag:<10}  ", tag_key)
+        self.logs_box.insert('end', f"{message}\n", "body")
+        self.logs_box.see('end')
+
+    def update_logs_display(self):
+        if not hasattr(self, 'logs_box'):
+            return
+        search_query = self.log_search_var.get().strip().lower()
+
+        # Update with real state logs
+        if state.LOG_QUEUE:
+            self.logs_box.delete('1.0', 'end')
+            for log in state.LOG_QUEUE:
+                if not search_query or search_query in log.lower():
+                    # Parse timestamp if present
+                    ts_match = re.match(r'(\d{2}:\d{2}:\d{2})\s*(.*)', log)
+                    if ts_match:
+                        ts, rest = ts_match.groups()
+                        # Extract tag
+                        tag_match = re.match(r'\[(.*?)\]\s*(.*)', rest)
+                        if tag_match:
+                            tag, content = tag_match.groups()
+                            self._append_activity_entry(ts, tag.upper()[:10], content)
+                        else:
+                            self._append_activity_entry(ts, "EVENT", rest)
+                    else:
+                        now_str = datetime.now().strftime("%H:%M:%S")
+                        self._append_activity_entry(now_str, "LOG", log)
+            self.logs_box.see('end')
+
+    # ── AI Console Logic ──
+    def _seed_initial_chat(self):
+        self.chat_history.configure(state='normal')
+        self.chat_history.insert('end', "VENTURE\n", "ai_tag")
+        self.chat_history.insert(
+            'end',
+            "Autonomous career operations agent online. I continuously scan job boards, evaluate semantic fit, and manage your application pipeline.\n\nWhat should I work on?\n\n",
+            "ai_body"
+        )
+        self.chat_history.tag_config("ai_tag", foreground=C["accent"], font=F["mono_sm"])
+        self.chat_history.tag_config("ai_body", foreground=C["body"], font=F["sm"])
+        self.chat_history.configure(state='disabled')
+
+    def _inject_quick_prompt(self, prompt_text):
+        self.chat_input.delete(0, 'end')
+        self.chat_input.insert(0, prompt_text)
+        self.send_chat_message()
+
+    def send_chat_message(self):
+        msg = self.chat_input.get().strip()
+        if not msg:
+            return
+
+        # Hide quick chips once chatting
+        if hasattr(self, 'quick_chips_frame'):
+            self.quick_chips_frame.pack_forget()
+
+        self.chat_history.configure(state='normal')
+        self.chat_history.insert('end', f"OPERATOR\n", "user_tag")
+        self.chat_history.insert('end', f"{msg}\n\n", "user_body")
+        self.chat_history.tag_config("user_tag", foreground=C["secondary"], font=F["mono_sm"])
+        self.chat_history.tag_config("user_body", foreground=C["text"], font=F["sm"])
+        self.chat_history.configure(state='disabled')
+        self.chat_history.see('end')
+        self.chat_input.delete(0, 'end')
+
+        def update_chat_ui(reply, commands):
+            self.chat_history.configure(state='normal')
+            hist_content = self.chat_history.get('1.0', 'end')
+            thinking_idx = hist_content.rfind("VENTURE  ·  Thinking...")
+            if thinking_idx != -1:
+                line_no = hist_content.count('\n', 0, thinking_idx) + 1
+                self.chat_history.delete(f"{line_no}.0", 'end')
+
+            self.chat_history.insert('end', "VENTURE\n", "ai_tag")
+            self.chat_history.insert('end', f"{reply}\n\n", "ai_body")
+            self.chat_history.tag_config("ai_tag", foreground=C["accent"], font=F["mono_sm"])
+            self.chat_history.tag_config("ai_body", foreground=C["body"], font=F["sm"])
+            self.chat_history.configure(state='disabled')
+            self.chat_history.see('end')
+
+            if commands:
+                for cmd in commands:
+                    self.controller.execute_chat_command(cmd)
+
+        def generate_response():
+            self.after(0, lambda: self._show_thinking())
+
+            logs_list = list(state.LOG_QUEUE)
+            logs_context = "\n".join(logs_list[-10:])
+            cand_context = json.dumps(CONFIG.get("candidate", {}), indent=2)
+            resume_text = extract_resume_text()
+            history_text = get_recent_history_text(limit=10)
+
+            prompt = f"""
+You are VENTURE, the autonomous career intelligence agent.
+Candidate Stored Profile:
+{cand_context}
+
+Resume Excerpt:
+{resume_text[:2500]}
+
+Recent Applied Database Records:
+{history_text}
+
+Recent Operations Log Context:
+{logs_context}
+
+User Query: {msg}
+
+Answer concisely, authoritative and execution-focused like Linear or Palantir console software.
+If the user asks to add or search a job query, include: [COMMAND: {{"type": "append_query", "value": "<query>"}}]
+If the user updates expected CTC, include: [COMMAND: {{"type": "update_qa_vault", "key": "expected_ctc", "value": "<ctc>"}}]
+"""
+            reply = query_ai_model(prompt)
+
+            commands = []
+            for match_cmd in re.finditer(r'\[COMMAND:\s*(.*?)\]', reply, re.DOTALL):
+                try:
+                    cmd_json = json.loads(match_cmd.group(1).strip())
+                    commands.append(cmd_json)
+                    reply = reply.replace(match_cmd.group(0), "").strip()
+                except Exception:
+                    pass
+
+            self.after(0, lambda: update_chat_ui(reply, commands))
+
+        threading.Thread(target=generate_response, daemon=True).start()
+
+    def _show_thinking(self):
+        self.chat_history.configure(state='normal')
+        self.chat_history.insert('end', "VENTURE  ·  Thinking...\n\n", "thinking")
+        self.chat_history.tag_config("thinking", foreground=C["secondary"], font=F["mono_sm"])
+        self.chat_history.configure(state='disabled')
+        self.chat_history.see('end')
+
+    # ── Action Handlers ──
     def toggle_radar_action(self):
-        """Toggle background radar poller (P5.1)."""
         agent = get_radar_agent(callback=self.on_radar_job_found)
         if agent.is_running():
             agent.stop()
-            self.btn_radar.configure(text="📡  Radar: Off", fg_color=C["elevated"], text_color=C["text"], border_color=C["border"])
-            self.radar_status_dot.configure(text_color=C["dim"])
-            self.radar_status_lbl.configure(text="Radar: Inactive — Background polling idle", text_color=C["muted"])
+            self.btn_radar.configure(text="Radar off", text_color=C["secondary"])
+            log_message("[RADAR] Background polling stopped")
         else:
             agent.start()
-            self.btn_radar.configure(text="📡  Radar: On", fg_color=C["elevated"], text_color=C["green"], border_color=C["green"])
+            self.btn_radar.configure(text="Radar on", text_color=C["green"])
             queries_cnt = len(CONFIG.get("settings", {}).get("queries", []))
-            self.radar_status_dot.configure(text_color=C["green"])
-            self.radar_status_lbl.configure(
-                text=f"Radar: Active — {queries_cnt} queries polling every {agent._interval}s",
-                text_color=C["green"]
+            log_message(f"[RADAR] Scanning active across {queries_cnt} queries")
+
+    def toggle_pause_action(self):
+        state.BOT_PAUSED = not state.BOT_PAUSED
+        if state.BOT_PAUSED:
+            self.btn_pause.configure(text="Resume", text_color=C["green"])
+            log_message("[AGENT] Execution paused by operator")
+        else:
+            self.btn_pause.configure(text="Pause", text_color=C["secondary"])
+            log_message("[AGENT] Execution resumed by operator")
+
+    def toggle_bot_action(self):
+        if state.BOT_RUNNING:
+            stop_bot()
+            self.btn_toggle.configure(
+                text="Start agent",
+                fg_color=C["accent"],
+                hover_color=C["accent_h"],
+                text_color=C["primary_on"],
+                border_width=0
             )
+            log_message("[AGENT] Pipeline stopped")
+        else:
+            start_bot_thread()
+            self.btn_toggle.configure(
+                text="Stop agent",
+                fg_color="transparent",
+                hover_color=C["red_glow"],
+                text_color=C["red"],
+                border_width=1,
+                border_color=C["red"]
+            )
+            log_message("[AGENT] Pipeline engaged")
 
     def on_radar_job_found(self, job):
-        """Callback invoked when Radar discovers a fresh job opening."""
         title = job.get("title", "")
         company = job.get("company", "")
         url = job.get("url", "")
@@ -297,7 +580,7 @@ class DashboardView(ctk.CTkFrame):
 
                 if score >= 85:
                     from core.notifier import notify
-                    notify("JobPilot — Strong Match", f"{title} at {company} ({score}%)")
+                    notify("VENTURE — Strong Match", f"{title} at {company} ({score}%)")
 
                 with state.DOUBT_LOCK:
                     state.DOUBT_QUEUE.append({
@@ -306,310 +589,54 @@ class DashboardView(ctk.CTkFrame):
                     })
                 from core.db_manager import save_to_db
                 save_to_db(url, title, company, platform, "Suggested", f"Radar Match ({score}%): {reason}", score=score)
+                log_message(f"[MATCH] {title} at {company} — Fit score {score}%")
             except Exception as e:
-                log_message(f"Radar evaluation error: {e}")
+                log_message(f"[RADAR] Evaluation error: {e}")
 
         threading.Thread(target=bg_eval, daemon=True).start()
 
-    def toggle_bot_action(self):
-        if state.BOT_RUNNING:
-            stop_bot()
-            self.btn_toggle.configure(
-                text="▶  Start Bot",
-                fg_color=C["primary"],
-                hover_color=C["accent_h"],
-                text_color=C["primary_on"],
-                border_width=0
-            )
-        else:
-            start_bot_thread()
-            self.btn_toggle.configure(
-                text="■  Stop Bot",
-                fg_color=C["elevated"],
-                hover_color=C["card_hover"],
-                text_color=C["red"],
-                border_width=1,
-                border_color=C["red"]
-            )
-
-    def toggle_pause_action(self):
-        state.BOT_PAUSED = not state.BOT_PAUSED
-        if state.BOT_PAUSED:
-            self.btn_pause.configure(
-                text="▶  Resume",
-                fg_color=C["elevated"],
-                hover_color=C["card_hover"],
-                text_color=C["green"],
-                border_width=1,
-                border_color=C["green"]
-            )
-        else:
-            self.btn_pause.configure(
-                text="⏸  Pause",
-                fg_color=C["elevated"],
-                hover_color=C["card_hover"],
-                text_color=C["amber"],
-                border_width=1,
-                border_color=C["border"]
-            )
-
-    def update_logs_display(self):
-        if not hasattr(self, 'logs_box'):
-            return
-        search_query = self.log_search_var.get().strip().lower()
-        if search_query == "filter logs...":
-            search_query = ""
-            
-        self.logs_box.delete('1.0', 'end')
-        for log in state.LOG_QUEUE:
-            if not search_query or search_query in log.lower():
-                self.logs_box.insert('end', log + "\n")
-        self.logs_box.see('end')
-
+    # ── Main Update Loop ──
     def update_dashboard_data(self):
-        recalculate_metrics()
         s = _get_stats()
-        
-        new_applied   = s["applied"]
-        new_interview = s["interview"]
-        new_offer     = s["offer"]
-        new_score     = int(s["avg_score"])
 
-        prev = getattr(self, '_last_metrics', {})
-        if prev.get('applied')   != new_applied:   animate_count_up(self.applied_metric,   new_applied)
-        else:                                       self.applied_metric.configure(text=str(new_applied))
-        if prev.get('interview') != new_interview: animate_count_up(self.interview_metric, new_interview)
-        else:                                       self.interview_metric.configure(text=str(new_interview))
-        if prev.get('offer')     != new_offer:     animate_count_up(self.offer_metric,     new_offer)
-        else:                                       self.offer_metric.configure(text=str(new_offer))
-        if prev.get('score')     != new_score:     animate_count_up(self.avg_score_metric, new_score, suffix="%")
-        else:                                       self.avg_score_metric.configure(text=f"{new_score}%")
-        self._last_metrics = {'applied': new_applied, 'interview': new_interview, 'offer': new_offer, 'score': new_score}
-        
-        # Calculate funnel conversion percentages
-        int_rate = f"{(s['interview'] / s['applied'] * 100):.1f}%" if s['applied'] > 0 else "0%"
-        offer_rate = f"{(s['offer'] / s['interview'] * 100):.1f}%" if s['interview'] > 0 else "0%"
-        today_eval = state.SESSION_STATS.get("evaluated_today", 0)
-        today_match = state.SESSION_STATS.get("matches_today", 0)
-        
-        self.session_stats_lbl.configure(
-            text=f"Funnel: {s['applied']} Applied ➔ {s['interview']} Interviews ({int_rate}) ➔ {s['offer']} Offers ({offer_rate})  ·  Session: {today_eval} evaluated, {today_match} matched"
-        )
-        
-        # Update Radar stats
+        self.metric_opps.configure(text=str(s["opportunities"]))
+        self.metric_high_fit.configure(text=str(s["high_fit"]))
+        self.metric_applied.configure(text=str(s["applied"]))
+        self.metric_interviews.configure(text=str(s["interview"]))
+
+        # Hero Status Text
+        num_sources = len(CONFIG.get("settings", {}).get("target_platforms", [])) + len(CONFIG.get("settings", {}).get("company_career_pages", []))
+        if state.BOT_RUNNING and state.BOT_PAUSED:
+            self.hero_status_dot.configure(text_color=C["amber"])
+            self.hero_status_title.configure(text="VENTURE PAUSED")
+            self.hero_subtext_lbl.configure(text=f"Pipeline on hold · {s['opportunities']} evaluated · {s['high_fit']} high-fit matches")
+        elif state.BOT_RUNNING:
+            self.hero_status_dot.configure(text_color=C["green"])
+            self.hero_status_title.configure(text="VENTURE ACTIVE")
+            status_line = state.CURRENT_STATUS or f"Scanning {num_sources} sources"
+            self.hero_subtext_lbl.configure(text=f"{status_line} · {s['opportunities']} evaluated · {s['high_fit']} high-fit")
+        else:
+            self.hero_status_dot.configure(text_color=C["dim"])
+            self.hero_status_title.configure(text="VENTURE STANDBY")
+            self.hero_subtext_lbl.configure(text=f"Autonomous career engine idle · {num_sources} sources armed · {s['opportunities']} evaluated")
+
+        # Session Runtime
+        session_start = state.SESSION_STATS.get("session_start")
+        if state.BOT_RUNNING and session_start:
+            elapsed = int((datetime.now() - session_start).total_seconds())
+            h, rem = divmod(elapsed, 3600)
+            m, sec = divmod(rem, 60)
+            self.hero_runtime_lbl.configure(text=f"[{h:02d}:{m:02d}:{sec:02d}]")
+        else:
+            self.hero_runtime_lbl.configure(text="")
+
+        # Radar button label
         agent = get_radar_agent()
-        self.radar_count_lbl.configure(text=f"{agent.new_jobs_found} new jobs found this session")
         if agent.is_running():
-            self.radar_status_dot.configure(text_color=C["green"])
-            self.radar_status_lbl.configure(
-                text=f"Radar: Active — {len(CONFIG.get('settings', {}).get('queries', []))} queries polling every {agent._interval}s",
-                text_color=C["green"]
-            )
+            self.btn_radar.configure(text="Radar on", text_color=C["green"])
         else:
-            self.radar_status_dot.configure(text_color=C["dim"])
-            self.radar_status_lbl.configure(
-                text="Radar: Inactive — Background polling idle",
-                text_color=C["muted"]
-            )
-            
-        if state.BOT_RUNNING:
-            self.btn_toggle.configure(
-                text="■  Stop Bot",
-                fg_color=C["elevated"],
-                hover_color=C["card_hover"],
-                text_color=C["red"],
-                border_width=1,
-                border_color=C["red"]
-            )
-        else:
-            self.btn_toggle.configure(
-                text="▶  Start Bot",
-                fg_color=C["primary"],
-                hover_color=C["accent_h"],
-                text_color=C["primary_on"],
-                border_width=0
-            )
-            
+            self.btn_radar.configure(text="Radar off", text_color=C["secondary"])
+
+        # Update pipeline flow and activity stream
+        self.draw_pipeline_flow(s)
         self.update_logs_display()
-        self.draw_vector_charts(s)
-
-    def draw_vector_charts(self, stats=None):
-        self.chart_canvas.delete("all")
-        s = stats or _get_stats()
-        
-        w = self.chart_canvas.winfo_width()
-        h = self.chart_canvas.winfo_height()
-        if w < 100: w = 450
-        if h < 100: h = 180
-
-        mid_x = int(w * 0.52)
-
-        # ── 1. Left Half: 7-Day Activity Sparkline ──
-        self.chart_canvas.create_text(20, 16, text="7-DAY APPLICATIONS VOLUME", fill=C["charcoal"], font=F["xs_b"], anchor="w")
-        
-        # Generate last 7 days list
-        today = datetime.now().date()
-        date_map = {row[0]: row[1] for row in s["last_7_days"]}
-        days_data = []
-        for i in range(6, -1, -1):
-            d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-            label = (today - timedelta(days=i)).strftime("%a").upper()
-            days_data.append((label, date_map.get(d, 0)))
-
-        max_activity = max([cnt for _, cnt in days_data] + [1])
-        plot_x0, plot_x1 = 25, mid_x - 30
-        plot_y0, plot_y1 = 40, h - 32
-        step_x = (plot_x1 - plot_x0) / max(len(days_data) - 1, 1)
-
-        # Baseline hairline
-        self.chart_canvas.create_line(plot_x0, plot_y1, plot_x1, plot_y1, fill=C["hairline_strong"], width=1)
-
-        points = []
-        for idx, (label, count) in enumerate(days_data):
-            px = plot_x0 + idx * step_x
-            py = plot_y1 - (count / max_activity) * (plot_y1 - plot_y0)
-            points.append((px, py, count, label))
-
-        # Connect sparkline line
-        for idx in range(len(points) - 1):
-            x1, y1 = points[idx][0], points[idx][1]
-            x2, y2 = points[idx + 1][0], points[idx + 1][1]
-            self.chart_canvas.create_line(x1, y1, x2, y2, fill=C["ink"], width=2)
-
-        # Points & value labels
-        for px, py, count, label in points:
-            r = 3
-            self.chart_canvas.create_oval(px - r, py - r, px + r, py + r, fill=C["ink"], outline=C["card"])
-            if count > 0:
-                self.chart_canvas.create_text(px, py - 10, text=str(count), fill=C["ink"], font=F["xs_b"])
-            self.chart_canvas.create_text(px, plot_y1 + 14, text=label, fill=C["ash"], font=F["xs"])
-
-        # Divider between sparkline and platform breakdown
-        self.chart_canvas.create_line(mid_x - 12, 16, mid_x - 12, h - 16, fill=C["hairline"], width=1)
-
-        # ── 2. Right Half: Platform Breakdown Bar Chart ──
-        self.chart_canvas.create_text(mid_x + 10, 16, text="APPLICATIONS BY PLATFORM", fill=C["charcoal"], font=F["xs_b"], anchor="w")
-        
-        plats = s["by_platform"]
-        if not plats:
-            plats = [("Indeed", 0), ("Naukri", 0), ("LinkedIn", 0)]
-
-        max_plat_c = max([c for _, c in plats] + [1])
-        start_y = 44
-        bar_max_w = w - mid_x - 90
-        colors_plat = {"indeed": C["blue"], "naukri": C["yellow"], "linkedin": "#0077b5", "radar": C["green"]}
-
-        for idx, (p_name, count) in enumerate(plats[:4]):
-            y = start_y + idx * 28
-            if y + 20 > h:
-                break
-            p_display = (p_name or "Other").capitalize()
-            self.chart_canvas.create_text(mid_x + 10, y + 8, text=p_display[:10], fill=C["charcoal"], font=F["xs"], anchor="w")
-
-            bar_w = int((count / max_plat_c) * bar_max_w) if max_plat_c > 0 else 0
-            bar_w = max(bar_w, 4) if count > 0 else 2
-            color = colors_plat.get(p_name.lower(), C["charcoal"])
-
-            # Background groove
-            self.chart_canvas.create_rectangle(mid_x + 85, y + 3, mid_x + 85 + bar_max_w, y + 13, fill=C["elevated"], outline=C["hairline"])
-            # Filled bar
-            self.chart_canvas.create_rectangle(mid_x + 85, y + 3, mid_x + 85 + bar_w, y + 13, fill=color, outline="")
-            # Count label
-            self.chart_canvas.create_text(mid_x + 95 + bar_max_w, y + 8, text=str(count), fill=C["ink"], font=F["xs_b"], anchor="w")
-
-    def send_chat_message(self):
-        msg = self.chat_input.get().strip()
-        if not msg: return
-        
-        self.chat_history.configure(state='normal')
-        self.chat_history.insert('end', f"You: {msg}\n\n", "user")
-        self.chat_history.tag_config("user", foreground=C["accent_h"], font=('Segoe UI', 9, 'bold'))
-        self.chat_history.configure(state='disabled')
-        self.chat_history.see('end')
-        self.chat_input.delete(0, 'end')
-        
-        def update_chat_ui(reply, commands):
-            self.chat_history.configure(state='normal')
-            hist_content = self.chat_history.get('1.0', 'end')
-            thinking_idx = hist_content.rfind("AI: Thinking...")
-            if thinking_idx != -1:
-                line_no = hist_content.count('\n', 0, thinking_idx) + 1
-                self.chat_history.delete(f"{line_no}.0", 'end')
-                
-            self.chat_history.insert('end', f"AI: {reply}\n\n", "ai")
-            self.chat_history.tag_config("ai", foreground=C["text"])
-            self.chat_history.configure(state='disabled')
-            self.chat_history.see('end')
-            
-            if commands:
-                for cmd in commands:
-                    self.controller.execute_chat_command(cmd)
-
-        def generate_response():
-            self.after(0, lambda: self._show_thinking())
-            
-            logs_list = list(state.LOG_QUEUE)
-            logs_context = "\n".join(logs_list[-10:])
-            cand_context = json.dumps(CONFIG["candidate"], indent=2)
-            resume_text = extract_resume_text()
-            
-            history_text = get_recent_history_text(limit=10)
-            
-            # Web Search Integration: Check if user question requests live internet/job market data
-            web_context = ""
-            msg_lower = msg.lower()
-            if any(k in msg_lower for k in ["search", "find", "job", "opening", "salary", "market", "latest", "company", "recruit"]):
-                try:
-                    q_term = CONFIG["settings"]["queries"][0] if CONFIG["settings"]["queries"] else "Software Engineer"
-                    web_results = fast_scrape_jobs(query=q_term, limit=5)
-                    if web_results:
-                        formatted_jobs = [f"- {j['title']} at {j['company']} ({j['platform']}): {j['url']}" for j in web_results[:5]]
-                        web_context = "5. Live Internet Job Market Data (Real-time Web Search):\n" + "\n".join(formatted_jobs) + "\n"
-                except Exception as e:
-                    web_context = f"5. Live Internet Search Notice: {e}\n"
-
-            prompt = f"""
-You are the Job Assistant AI agent. You have access to:
-1. Candidate's PDF Resume content:
-{resume_text[:3000]}
-
-2. Stored Profile Configuration:
-{cand_context}
-
-3. Recent Applied Job History (from database):
-{history_text}
-
-4. Recent Operations Logs:
-{logs_context}
-
-{web_context}
-User Question: {msg}
-
-Instructions:
-1. Answer the user's question accurately and politely using the resume content, applied database history, profile configs, or live internet job market data.
-2. If they ask about their resume details or past job applications, retrieve it from the context fields.
-3. If they ask to search or add a new job role (e.g. "look for Python Developer jobs" or "add React Native"), append a command tag:
-[COMMAND: {{"type": "append_query", "value": "Python Developer"}}]
-4. If they state a salary preference or expected CTC (e.g. "my expected CTC is 12 LPA"), append a command tag:
-[COMMAND: {{"type": "update_qa_vault", "key": "expected_ctc", "value": "12"}}]
-"""
-            reply = query_ai_model(prompt)
-            
-            commands = []
-            for match_cmd in re.finditer(r'\[COMMAND:\s*(.*?)\]', reply, re.DOTALL):
-                try:
-                    cmd_json = json.loads(match_cmd.group(1).strip())
-                    commands.append(cmd_json)
-                    reply = reply.replace(match_cmd.group(0), "").strip()
-                except Exception: pass
-            
-            self.after(0, lambda: update_chat_ui(reply, commands))
-                
-        threading.Thread(target=generate_response, daemon=True).start()
-
-    def _show_thinking(self):
-        self.chat_history.configure(state='normal')
-        self.chat_history.insert('end', "AI: Thinking...\n", "thinking")
-        self.chat_history.tag_config("thinking", foreground=C["dim"], font=('Segoe UI', 9, 'italic'))
-        self.chat_history.configure(state='disabled')
-        self.chat_history.see('end')

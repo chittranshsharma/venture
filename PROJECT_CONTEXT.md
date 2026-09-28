@@ -334,41 +334,48 @@ Located in `automation/form_autofiller.py` and `automation/specialists/`.
 
 ## 10. User Interface & Design System
 
-The application follows the strict **Warm Ink / Dark Editorial Design System** documented in [`DESIGN.md`](file:///d:/JobPilot-AI/DESIGN.md).
+The application follows a **quiet, dark, restrained, technical, and premium** aesthetic inspired by **Linear, Raycast, Palantir, and Vercel** ("Luxury through Restraint").
 
 ### 10.1 Color Palette Tokens (`ui/components.py` -> `C`)
 | Token | Hex Code | Visual Role |
 |---|---|---|
-| `C["bg"]` / `C["canvas"]` | `#151210` | Primary application canvas background (Warm Ink) |
-| `C["sidebar"]` | `#111009` | Darker warm tone for left navigation rail |
-| `C["card"]` | `#1E1B17` | Standard surface for cards, panels, and sections |
-| `C["card_hover"]` | `#252118` | Interactive card hover state |
-| `C["elevated"]` | `#2A2620` | Elevated surfaces, pills, and input containers |
-| `C["deep"]` | `#0E0C0A` | Deepest tone used for code windows and log shells |
-| `C["hairline"]` | `#1C1A16` | Subtle 1px structural separator |
-| `C["hairline_strong"]` / `C["border"]` | `#2E2B26` | 1px border for cards, inputs, and code windows |
-| `C["primary"]` / `C["ink"]` / `C["text"]` | `#F0EBE3` | Bone-white primary readable text and CTA background |
-| `C["primary_on"]` | `#151210` | Dark text on white primary button surfaces |
-| `C["body"]` | `#C4BDB4` | Soft warm text for secondary body copy |
-| `C["charcoal"]` | `#9A938A` | Captions, metadata, and status labels |
-| `C["muted"]` | `#7A746C` | Form field labels and inactive tabs |
-| `C["dim"]` | `#514D48` | Disabled text and empty-state placeholders |
-| `C["amber"]` / `C["yellow"]` | `#D4A843` | Warm warning accents and radar highlights |
-| `C["green"]` | `#2DD4A0` | Success indicators, offers, and active status dots |
-| `C["red"]` | `#E85454` | Danger indicators, rejections, and error states |
-| `C["blue"]` | `#4E9CFF` | Functional links and interview tags (no neon styling) |
+| `C["bg"]` / `C["canvas"]` | `#0F0F0D` | Quiet technical dark canvas background |
+| `C["sidebar"]` | `#11110F` | Deep dark left navigation rail |
+| `C["card"]` / `C["surface"]` | `#171614` | Primary card and panel surface |
+| `C["card_hover"]` / `C["elevated"]` | `#1C1B18` | Interactive hover and elevated containers |
+| `C["deep"]` | `#0D0D0B` | Deep console background for activity stream & chat |
+| `C["hairline"]` | `#1F1E1B` | Subtle 1px structural separator |
+| `C["border"]` / `C["hairline_strong"]`| `#282621` | Structural 1px boundary for cards, inputs, and tables |
+| `C["primary"]` / `C["text"]` | `#E8E5DE` | Off-white primary readable text |
+| `C["secondary"]` / `C["charcoal"]` | `#9A968D` | Secondary labels, subtexts, and metadata |
+| `C["tertiary"]` / `C["muted"]` | `#66635C` | Group headers, timestamps, and subtle indicators |
+| `C["accent"]` | `#D6D0C4` | Neutral warm accent for primary buttons & highlights |
+| `C["green"]` (Success) | `#8FAF9A` | Muted sage green for active states & offers |
+| `C["amber"]` / `C["yellow"]` (Warning)| `#B5A06A` | Muted amber for warnings and pauses |
+| `C["red"]` (Error/Danger) | `#A87575` | Muted rose red for rejections and stops |
+| `C["blue"]` | `#7E9DB5` | Muted slate blue for links and telemetry tags |
+| `C["purple"]` | `#9E8FA8` | Muted slate purple for RAG retrieval tags |
 
 ### 10.2 Typography (`ui/components.py` -> `F`)
-- **Display & UI Headers:** `Segoe UI` (e.g., `metric` 26pt bold, `h1` 16pt bold, `h2` 13pt bold, `h3` 11pt bold).
+- **Display & UI Headers:** `Segoe UI` (e.g., `metric` 24pt bold, `h1` 15pt bold, `h2` 12pt bold, `h3` 11pt bold).
 - **Body & Labels:** `Segoe UI` (e.g., `sm` 10pt regular, `sm_b` 10pt bold, `xs` 9pt regular, `xs_b` 9pt bold).
-- **Code & Telemetry:** `Consolas` (e.g., `mono` 10pt regular, `mono_sm` 9pt regular).
+- **Technical & Telemetry:** `Consolas` (e.g., `mono` 10pt regular, `mono_sm` 9pt regular for timestamps, tags, and logs).
 
-### 10.3 Primary Views
-1. **Dashboard (`ui/dashboard_view.py`):**
-   - Live Radar Banner with pulsing status indicator.
-   - 4 Metric Cards: Applications Sent, Interviews Scheduled, Offers Received, Avg Match Score.
-   - Funnel & conversion stats summary.
-   - Dual-pane 2x2 grid: Log window with search filter, Pipeline Analytics Canvas (7-day application sparkline & platform distribution), and AI Assistant Console.
+### 10.3 Primary Views & Architectural Layout
+1. **Top Status Bar (`ui/app_window.py`):**
+   - Brand identifier (`◆ VENTURE v3.5`) and operational descriptor (`Autonomous Career Engine`).
+   - Technical Telemetry Triad: `● CORE: Qwen 2.5 7B`, `● RADAR: Active/Idle`, `● DB: Synced`.
+2. **Categorized Sidebar (`ui/app_window.py`):**
+   - `WORKSPACE`: Overview, Opportunities, Approvals, Applications.
+   - `INTELLIGENCE`: Venture AI, Radar, Recruiters.
+   - `PROFILE`: Profile & QA, Credentials.
+   - `SYSTEM`: Settings.
+3. **Control Dashboard (`ui/dashboard_view.py`):**
+   - **Central Hero Status Card:** Agent state (`VENTURE ACTIVE` or `VENTURE STANDBY`), evaluated metrics summary, and restrained controls (`[Start agent]` filled, `Pause` ghost, `Radar` ghost).
+   - **Four Metric Cards:** Opportunities Found, High Fit Leads, Applications Sent, Interviews Scheduled.
+   - **Opportunity Pipeline Flow:** Horizontal visual stage bar (`RADAR ➔ MATCHED ➔ APPROVED ➔ APPLIED ➔ INTERVIEW ➔ OFFER`).
+   - **Live Engineering Activity Stream:** Formatted console with timestamp (`Consolas`), category tags (`RADAR`, `MATCH`, `RAG`, `APPLICATION`), and seed events preventing empty states.
+   - **AI Console (`VENTURE INTELLIGENCE`):** Model indicator (`QWEN 2.5 ●`), empty-state quick-action prompt chips, and clean operator conversation stream.
 2. **Applied History (`ui/history_view.py`):**
    - Interactive SQLite Treeview table with status color badges (`Applied`, `Interview`, `Offer`, `Rejected`, `Withdrawn`).
    - One-click full export to CSV and JSON (including AI score, strengths, gaps, and justifications).
