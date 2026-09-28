@@ -281,9 +281,11 @@ class SettingsView(ctk.CTkFrame):
 
         self.settings_min_score = add_form_input(card, "Minimum Match Score (%)")
         self.settings_max_jobs = add_form_input(card, "Max Jobs to Check Per Query")
+        self.settings_radar_interval = add_form_input(card, "Background Radar Scan Interval (Seconds, min 10)")
         
         self.settings_min_score.insert(0, str(CONFIG["settings"]["min_score"]))
         self.settings_max_jobs.insert(0, str(CONFIG["settings"].get("max_jobs_per_query", 10)))
+        self.settings_radar_interval.insert(0, str(CONFIG["settings"].get("radar_interval_seconds", 60)))
         
         # Filters
         add_section_divider(card, "Job Search Filters")
@@ -338,7 +340,55 @@ class SettingsView(ctk.CTkFrame):
             
         ctk.CTkLabel(card, text="Coming Soon: Hirist, Foundit, Wellfound", font=F["xs"],
                      text_color=C["dim"], anchor="w").pack(anchor='w', padx=16, pady=(8, 0))
-        
+
+        # ═══════════════════════════════════════════════════
+        # Company Career Pages (Direct Crawl)
+        # ═══════════════════════════════════════════════════
+        add_section_divider(card, "Company Career Pages")
+
+        career_info = ctk.CTkLabel(
+            card,
+            text="Add direct company careers page URLs (e.g. jobs.lever.co/stripe, boards.greenhouse.io/notion).\nRadar will crawl these on every poll cycle alongside job boards.",
+            font=F["xs"], text_color=C["ash"], anchor="w", justify="left"
+        )
+        career_info.pack(anchor='w', padx=16, pady=(0, 8))
+
+        # Input row: URL + Company Name + Add button
+        career_input_row = ctk.CTkFrame(card, fg_color="transparent")
+        career_input_row.pack(fill='x', padx=16, pady=(0, 6))
+        career_input_row.columnconfigure(0, weight=3)
+        career_input_row.columnconfigure(1, weight=1)
+        career_input_row.columnconfigure(2, weight=0)
+
+        self.entry_career_url = ctk.CTkEntry(
+            career_input_row,
+            placeholder_text="https://jobs.lever.co/stripe",
+            fg_color=C["input"], border_color=C["border"],
+            text_color=C["ink"], font=F["xs"], corner_radius=8, height=36
+        )
+        self.entry_career_url.grid(row=0, column=0, sticky='ew', padx=(0, 6))
+
+        self.entry_career_company = ctk.CTkEntry(
+            career_input_row,
+            placeholder_text="Company Name",
+            fg_color=C["input"], border_color=C["border"],
+            text_color=C["ink"], font=F["xs"], corner_radius=8, height=36
+        )
+        self.entry_career_company.grid(row=0, column=1, sticky='ew', padx=(0, 6))
+
+        btn_add_career = create_action_btn(career_input_row, "+ Add", self._add_career_page, "success", "small")
+        btn_add_career.grid(row=0, column=2)
+
+        # Scrollable list of added pages
+        self._career_list_frame = ctk.CTkScrollableFrame(
+            card, fg_color=C["elevated"], corner_radius=8, height=130
+        )
+        self._career_list_frame.pack(fill='x', padx=16, pady=(0, 8))
+        self._career_list_frame.columnconfigure(0, weight=1)
+        self._career_pages_widgets = []  # track rows for removal
+
+        self._render_career_pages()
+
         # ═══════════════════════════════════════════════════
         # Save Button
         # ═══════════════════════════════════════════════════
@@ -346,6 +396,74 @@ class SettingsView(ctk.CTkFrame):
         btn_frame.pack(anchor='w', padx=16, pady=(24, 16))
         btn_save = create_action_btn(btn_frame, "Save All Settings", self.save_settings_action, "primary", "large")
         btn_save.pack(side='left')
+
+
+    # ── Career Pages Handlers ──
+    def _render_career_pages(self):
+        """Rebuild the career pages list display from config."""
+        for w in self._career_list_frame.winfo_children():
+            w.destroy()
+        pages = CONFIG.get("settings", {}).get("company_career_pages", [])
+        if not pages:
+            ctk.CTkLabel(
+                self._career_list_frame,
+                text="No company career pages added yet.",
+                font=F["xs"], text_color=C["dim"], anchor="w"
+            ).pack(anchor='w', padx=8, pady=8)
+            return
+        for i, entry in enumerate(pages):
+            url = entry.get("url", "") if isinstance(entry, dict) else entry
+            company = entry.get("company", "") if isinstance(entry, dict) else ""
+            row = ctk.CTkFrame(self._career_list_frame, fg_color="transparent")
+            row.pack(fill='x', pady=2)
+            # Colored dot
+            ctk.CTkLabel(row, text="🏢", font=("Segoe UI", 10), width=20).pack(side='left', padx=(4, 4))
+            # Company + URL label
+            display = f"{company}  —  {url}" if company else url
+            ctk.CTkLabel(
+                row, text=display[:80] + ("..." if len(display) > 80 else ""),
+                font=F["xs"], text_color=C["body"], anchor="w"
+            ).pack(side='left', fill='x', expand=True)
+            # Remove button
+            btn_rm = ctk.CTkButton(
+                row, text="✕", width=24, height=22,
+                fg_color="transparent", hover_color=C["red_glow"],
+                text_color=C["muted"], font=F["xs_b"], corner_radius=4, cursor="hand2",
+                command=lambda idx=i: self._remove_career_page(idx)
+            )
+            btn_rm.pack(side='right', padx=(0, 4))
+
+    def _add_career_page(self):
+        url = self.entry_career_url.get().strip()
+        company = self.entry_career_company.get().strip()
+        if not url:
+            return
+        if not url.startswith("http"):
+            url = "https://" + url
+        pages = list(CONFIG.get("settings", {}).get("company_career_pages", []))
+        # Dedup by URL
+        existing_urls = [e.get("url", "") if isinstance(e, dict) else e for e in pages]
+        if url in existing_urls:
+            return
+        pages.append({"url": url, "company": company})
+        CONFIG.setdefault("settings", {})["company_career_pages"] = pages
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(CONFIG, f, indent=4)
+        self.entry_career_url.delete(0, 'end')
+        self.entry_career_company.delete(0, 'end')
+        self._render_career_pages()
+        log_message(f"🏢 Career page added: {company or url}")
+
+    def _remove_career_page(self, idx: int):
+        pages = list(CONFIG.get("settings", {}).get("company_career_pages", []))
+        if 0 <= idx < len(pages):
+            removed = pages.pop(idx)
+            CONFIG["settings"]["company_career_pages"] = pages
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(CONFIG, f, indent=4)
+            self._render_career_pages()
+            name = removed.get("company") or removed.get("url", "") if isinstance(removed, dict) else removed
+            log_message(f"🏢 Career page removed: {name}")
 
     # ── Handler Methods ──
     def on_provider_changed(self, value):
@@ -488,8 +606,55 @@ class SettingsView(ctk.CTkFrame):
 
     def save_settings_action(self):
         try:
-            min_sc = int(self.settings_min_score.get().strip())
-            max_jb = int(self.settings_max_jobs.get().strip())
+            # ── Validation checks (Upgrade 3.3) ──
+            try:
+                min_sc = int(self.settings_min_score.get().strip())
+                if not (0 <= min_sc <= 100):
+                    messagebox.showerror("Validation Error", "Minimum Match Score must be between 0 and 100%.")
+                    return
+            except ValueError:
+                messagebox.showerror("Validation Error", "Minimum Match Score must be a valid integer.")
+                return
+
+            try:
+                max_jb = int(self.settings_max_jobs.get().strip())
+                if not (1 <= max_jb <= 100):
+                    messagebox.showerror("Validation Error", "Max Jobs to Check must be between 1 and 100.")
+                    return
+            except ValueError:
+                messagebox.showerror("Validation Error", "Max Jobs to Check must be a valid integer.")
+                return
+
+            try:
+                radar_int = int(self.settings_radar_interval.get().strip())
+                if radar_int < 10:
+                    messagebox.showerror("Validation Error", "Radar Scan Interval must be at least 10 seconds.")
+                    return
+            except ValueError:
+                messagebox.showerror("Validation Error", "Radar Scan Interval must be a valid integer.")
+                return
+
+            try:
+                daily_cap = int(self.settings_daily_cap.get().strip())
+                if not (1 <= daily_cap <= 200):
+                    messagebox.showerror("Validation Error", "Daily Application Safety Cap must be between 1 and 200.")
+                    return
+            except ValueError:
+                messagebox.showerror("Validation Error", "Daily Application Safety Cap must be a valid integer.")
+                return
+
+            try:
+                min_d = int(self.settings_min_delay.get().strip())
+                max_d = int(self.settings_max_delay.get().strip())
+                if min_d < 1 or max_d < 1:
+                    messagebox.showerror("Validation Error", "Delays must be at least 1 second.")
+                    return
+                if max_d < min_d:
+                    messagebox.showerror("Validation Error", "Maximum delay cannot be less than minimum delay.")
+                    return
+            except ValueError:
+                messagebox.showerror("Validation Error", "Delay values must be valid integers.")
+                return
             
             plat_list = []
             for plat, sw in self.plat_switches.items():
@@ -497,10 +662,11 @@ class SettingsView(ctk.CTkFrame):
                 
             CONFIG["settings"]["min_score"] = min_sc
             CONFIG["settings"]["max_jobs_per_query"] = max_jb
+            CONFIG["settings"]["radar_interval_seconds"] = radar_int
             CONFIG["settings"]["safe_mode"] = True if self.sw_safe_mode.get() else False
-            CONFIG["settings"]["daily_apply_cap"] = int(self.settings_daily_cap.get().strip())
-            CONFIG["settings"]["min_delay_seconds"] = int(self.settings_min_delay.get().strip())
-            CONFIG["settings"]["max_delay_seconds"] = int(self.settings_max_delay.get().strip())
+            CONFIG["settings"]["daily_apply_cap"] = daily_cap
+            CONFIG["settings"]["min_delay_seconds"] = min_d
+            CONFIG["settings"]["max_delay_seconds"] = max_d
             CONFIG["settings"]["experience_level"] = self.sel_exp.get()
             CONFIG["settings"]["job_type"] = self.sel_jt.get()
             CONFIG["settings"]["location_type"] = self.sel_loc.get()
@@ -522,8 +688,8 @@ class SettingsView(ctk.CTkFrame):
             
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(CONFIG, f, indent=4)
-            messagebox.showinfo("Success", "All settings saved successfully!")
-            log_message("Settings saved via Desktop GUI.")
+            messagebox.showinfo("Success", "All settings validated & saved successfully!")
+            log_message("Settings validated & saved via Desktop GUI.")
             recalculate_metrics()
             self.controller.refresh_nav_buttons()
         except Exception as e:
@@ -535,6 +701,9 @@ class SettingsView(ctk.CTkFrame):
         self.settings_min_score.insert(0, str(CONFIG["settings"]["min_score"]))
         self.settings_max_jobs.delete(0, 'end')
         self.settings_max_jobs.insert(0, str(CONFIG["settings"].get("max_jobs_per_query", 10)))
+        if hasattr(self, 'settings_radar_interval'):
+            self.settings_radar_interval.delete(0, 'end')
+            self.settings_radar_interval.insert(0, str(CONFIG["settings"].get("radar_interval_seconds", 60)))
         
         prov_val = CONFIG["settings"].get("ai_provider", "local")
         if prov_val == "gemini": prov_val = "cloud"

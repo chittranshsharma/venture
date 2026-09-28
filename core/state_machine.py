@@ -34,7 +34,18 @@ VALID_TRANSITIONS = {
 }
 
 _ERROR_STATES = {"FAILED", "NEEDS_RETRY"}
-_TERMINAL_STATES = {"SUBMITTED", "Applied", "REJECTED", "Rejected", "Withdrawn"}
+# Fix 1.6: Normalized to cover ALL status strings stored by AppStatus + FSM constants.
+# DB stores AppStatus strings ("Applied", "Rejected", etc.) and FSM constants ("SUBMITTED").
+# Both sets must be checked so is_job_completed() correctly blocks re-evaluation.
+_TERMINAL_STATES = {
+    # FSM constants
+    "SUBMITTED", "REJECTED",
+    # AppStatus display strings (stored in SQLite)
+    "Applied", "Rejected", "Withdrawn", "Offer", "Offer Received",
+    "Interview", "Interviewing",
+    # Bot runner states
+    "Manual Approval Apply", "SUBMITTED",
+}
 
 def can_transition(current: str, new_state: str) -> bool:
     """Check if state transition is legally allowed by FSM rules."""

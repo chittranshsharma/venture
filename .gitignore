@@ -8,6 +8,8 @@ config.json
 applied_jobs.csv
 recruiter_contacts.csv
 *.db
+*.db-shm
+*.db-wal
 backups/
 bot_logs.txt
 edge-debug-profile/

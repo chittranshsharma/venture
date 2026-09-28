@@ -8,7 +8,8 @@ from core.db_manager import (
     log_message, 
     AppStatus, 
     get_applications_history, 
-    export_applications_to_csv, 
+    export_applications_to_csv,
+    export_applications_to_json,
     update_job_status_in_csv
 )
 from automation.status_tracker import start_tracker_thread
@@ -34,8 +35,11 @@ class HistoryView(ctk.CTkFrame):
         btn_frame = ctk.CTkFrame(title_row, fg_color="transparent")
         btn_frame.pack(side='right')
         
-        btn_export = create_action_btn(btn_frame, "Export CSV", self.export_csv, "ghost", "small")
-        btn_export.pack(side='right', padx=(8, 0))
+        btn_export_json = create_action_btn(btn_frame, "Export JSON", self.export_json, "ghost", "small")
+        btn_export_json.pack(side='right', padx=(8, 0))
+
+        btn_export_csv = create_action_btn(btn_frame, "Export CSV", self.export_csv, "ghost", "small")
+        btn_export_csv.pack(side='right', padx=(8, 0))
         
         btn_scan = create_action_btn(btn_frame, "Scan Statuses", start_tracker_thread, "primary", "small")
         btn_scan.pack(side='right', padx=(8, 0))
@@ -133,6 +137,18 @@ class HistoryView(ctk.CTkFrame):
             messagebox.showinfo("Export Successful", f"History exported to:\n{export_path}")
         else:
             messagebox.showinfo("Export CSV", "No history data available to export.")
+
+    def export_json(self):
+        """Export SQLite applications table with AI evaluations to JSON in user's Downloads folder."""
+        downloads_folder = os.path.join(os.path.expanduser('~'), 'Downloads')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_path = os.path.join(downloads_folder, f"applied_jobs_{timestamp}.json")
+        
+        success = export_applications_to_json(export_path)
+        if success:
+            messagebox.showinfo("Export Successful", f"Full evaluation history exported to:\n{export_path}")
+        else:
+            messagebox.showinfo("Export JSON", "No history data available to export.")
 
     def load_history_table(self):
         """Load applications directly from SQLite database and apply status colors."""

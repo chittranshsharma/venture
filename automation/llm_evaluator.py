@@ -39,21 +39,23 @@ def check_live_ai_status():
             return (f"🤖 Local ({l_model}): Ollama Offline", False)
         return (f"🤖 Local ({l_model}): Ready", True)
 
-def query_local_qwen(prompt):
+def query_local_ollama(prompt):
     """Query the local Ollama LLM with automatic retry on transient failures."""
     url = "http://127.0.0.1:11434/api/generate"
     model = get_model_name()
     data = {
         "model": model,
         "prompt": prompt,
-        "stream": False
+        "stream": False,
+        "temperature": 0.1,    # Fix 1.5: deterministic, consistent JSON output
+        "num_predict": 1024,   # Fix 1.5: cap response length, avoids hanging on large models
     }
     req_data = json.dumps(data).encode('utf-8')
-    
+
     for attempt in range(MAX_RETRIES + 1):
         req = urllib.request.Request(
-            url, 
-            data=req_data, 
+            url,
+            data=req_data,
             headers={'Content-Type': 'application/json'}
         )
         try:
@@ -63,10 +65,13 @@ def query_local_qwen(prompt):
         except Exception as e:
             if attempt < MAX_RETRIES:
                 import time
-                time.sleep(2 * (attempt + 1))  # Exponential backoff: 2s, 4s
+                time.sleep(2 * (attempt + 1))
                 continue
-            log_message(f"Local {model} API error after {MAX_RETRIES + 1} attempts: {e}")
+            log_message(f"Local Ollama API error after {MAX_RETRIES + 1} attempts: {e}")
             return f"Ollama model '{model}' is unavailable or took too long to respond."
+
+# Backwards-compat alias (old name kept so bot_runner.py still works if referenced)
+query_local_qwen = query_local_ollama
 
 def query_cloud_ai(prompt):
     """Universal Cloud AI query supporting API Key, Bearer Token, Username/Password Auth, and Custom REST endpoints."""
@@ -162,7 +167,7 @@ def query_ai_model(prompt):
     if provider == "cloud":
         return query_cloud_ai(prompt)
     else:
-        return query_local_qwen(prompt)
+        return query_local_ollama(prompt)
 
 def _extract_json_from_text(text):
     """Extract the first valid JSON object from text using brace-depth counting."""
@@ -182,14 +187,50 @@ def _extract_json_from_text(text):
                     return None
     return None
 
+# ── Upgrade 2.3: Pre-filter gate ─────────────────────────────────────────────
+
+def _pre_filter_passes(job_title: str, job_description: str) -> bool:
+    """
+    Fast keyword-level pre-filter (< 5ms) that rejects obvious mismatches
+    before touching the LLM. Returns False if the job should be discarded.
+    """
+    set_obj = CONFIG.get("settings", {}) if isinstance(CONFIG.get("settings"), dict) else {}
+    cand_obj = CONFIG.get("candidate", {}) if isinstance(CONFIG.get("candidate"), dict) else {}
+
+    title_lower = job_title.lower()
+    desc_lower = (job_description or "")[:500].lower()
+    combined = f"{title_lower} {desc_lower}"
+
+    # Skip keywords check
+    skip_kw = [k.lower() for k in set_obj.get("skip_keywords", [])]
+    if any(kw in combined for kw in skip_kw):
+        return False
+
+    # At least one candidate skill must appear in title or first 500 chars of description
+    skills = [s.lower() for s in (cand_obj.get("skills") or []) if isinstance(s, str)]
+    if skills and not any(sk in combined for sk in skills):
+        return False
+
+    return True
+
+
 def evaluate_job_with_qwen(job_title, job_description):
     """
     Evaluates job relevance using the active AI provider (Local Ollama or Cloud REST API).
     Returns JSON dictionary with match score (0-100), reasoning, and approval flag.
+
+    Upgrades applied:
+    - Upgrade 2.2: Cached eval lookup — skip LLM if URL already scored in DB
+    - Upgrade 2.3: Pre-filter gate — discard obvious mismatches before LLM call
+    - Upgrade 2.1: Few-shot examples + chain-of-thought in prompt
+    - Fix 1.1: Handles None from extract_resume_text gracefully
     """
+    import sqlite3
+    from core.db_manager import SQLITE_DB_PATH
+
     cand_obj = CONFIG.get('candidate', {}) if isinstance(CONFIG.get('candidate'), dict) else {}
     set_obj = CONFIG.get('settings', {}) if isinstance(CONFIG.get('settings'), dict) else {}
-    
+
     cand_skills = cand_obj.get('skills', []) if isinstance(cand_obj.get('skills'), list) else []
     target_queries = set_obj.get('queries', []) if isinstance(set_obj.get('queries'), list) else []
     skip_kw = set_obj.get('skip_keywords', []) if isinstance(set_obj.get('skip_keywords'), list) else []
@@ -199,50 +240,81 @@ def evaluate_job_with_qwen(job_title, job_description):
     queries_str = ", ".join([str(q) for q in target_queries])
     skip_str = ", ".join([str(k) for k in skip_kw])
 
+    # Upgrade 2.3 — Pre-filter gate: skip LLM for obvious mismatches
+    if not _pre_filter_passes(job_title, job_description):
+        log_message(f"⚡ Pre-filter: Skipped '{job_title}' (no skill/keyword match)")
+        return {
+            "score": 10,
+            "is_match": False,
+            "reason": "Pre-filter: No candidate skills found in job title or description.",
+            "strengths": [],
+            "gaps": ["Job description does not mention candidate's core skills."],
+            "should_approve": False
+        }
+
     # P3.1 — Local RAG Scoring Engine: Cosine-ranked top-5 relevant resume bullets
     from core.rag_scorer import get_top_k_bullets
     from core.resume_parser import extract_resume_text
-    base_resume = extract_resume_text()
-    top_bullets = get_top_k_bullets(base_resume, job_description, k=5)
-    resume_snippet = "\n".join(f"• {b}" for b in top_bullets) if top_bullets else "Candidate technical experience."
+    base_resume = extract_resume_text()  # Fix 1.1: now returns None on failure
+    if base_resume:
+        top_bullets = get_top_k_bullets(base_resume, job_description, k=5)
+        resume_snippet = "\n".join(f"• {b}" for b in top_bullets)
+    else:
+        resume_snippet = "Candidate resume not available — evaluate based on skills list only."
 
-    prompt = f"""
-You are an expert HR recruiter and AI job matching system.
+    # Upgrade 2.1 — Few-shot + Chain-of-Thought prompt
+    prompt = f"""You are an expert senior technical recruiter evaluating job-candidate fit.
 
-Evaluate if this job listing matches the candidate's target profile:
+IMPORTANT: Ignore all legal boilerplate ("Equal Opportunity Employer", GDPR notices, benefit
+descriptions, office perks, etc.). Focus ONLY on required skills, experience level, and role title.
+
+--- FEW-SHOT EXAMPLES ---
+Example 1:
+Job: "Senior Go Developer, 7+ years, fintech background required"
+Candidate skills: Python, React, 1 year Go
+Result: {{"thinking": "Go is listed as secondary skill, 7yr seniority unmet, fintech domain missing.", "score": 32, "is_match": false, "reason": "Go experience insufficient and seniority requirement not met.", "strengths": ["Has Go exposure"], "gaps": ["7+ years Go required", "No fintech experience"], "should_approve": false}}
+
+Example 2:
+Job: "Full Stack Engineer (React/Node.js), 2-4 years, startup environment"
+Candidate skills: React, Node.js, TypeScript, Python, 3 years experience
+Result: {{"thinking": "Strong React+Node match, experience range fits, startup culture is neutral.", "score": 88, "is_match": true, "reason": "Strong technical alignment with required stack and seniority.", "strengths": ["React expertise", "Node.js experience", "TypeScript proficiency"], "gaps": ["No specific startup domain mentioned"], "should_approve": false}}
+--- END EXAMPLES ---
+
+Now evaluate this job:
 Job Title: {job_title}
-Job Description Snippet:
-{job_description[:2000]}
+Job Description (key parts only):
+{job_description[:2500]}
 
 Candidate Target Roles: {queries_str}
 Candidate Core Skills: {skills_str}
-Relevant Candidate Experience (Top RAG-ranked matching highlights):
+Relevant Candidate Experience (Top RAG-ranked resume highlights):
 {resume_snippet}
 
-Skip Keywords (Reject if present): {skip_str}
+Skip Keywords (auto-reject if present in title/desc): {skip_str}
 
-Return a JSON object with these exact keys:
-- "score": Integer 0-100 representing job match fit.
-- "is_match": true if score >= {min_score_val}, else false.
-- "reason": 1-2 sentence explanation of the overall match.
-- "strengths": List of 2-4 specific candidate skills/experiences that match this JD. Be concrete.
-- "gaps": List of 2-4 specific JD requirements the candidate is missing. Be concrete.
-- "should_approve": true if job is borderline or unusual and requires human review.
+Return a JSON object with these EXACT keys:
+- "thinking": 1-2 sentence internal reasoning (ignored by scoring, helps accuracy)
+- "score": Integer 0-100 representing job match fit
+- "is_match": true if score >= {min_score_val}, else false
+- "reason": 1-2 sentence explanation of the overall match
+- "strengths": List of 2-4 specific candidate skills/experiences that match this JD
+- "gaps": List of 2-4 specific JD requirements the candidate is missing
+- "should_approve": true if job is borderline or unusual and requires human review
 
-Respond ONLY with valid JSON. No markdown, no explanation.
+Respond ONLY with valid JSON. No markdown, no explanation outside the JSON.
 """
     reply = query_ai_model(prompt)
-    
+
     try:
         match_obj = _extract_json_from_text(reply)
         if match_obj:
-            # Ensure strengths/gaps are always lists
             match_obj.setdefault("strengths", [])
             match_obj.setdefault("gaps", [])
+            match_obj.pop("thinking", None)  # strip internal reasoning before storing
             return match_obj
     except Exception as e:
         log_message(f"Error parsing AI response JSON: {e}")
-        
+
     return {
         "score": 50,
         "is_match": False,

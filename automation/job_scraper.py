@@ -1,10 +1,55 @@
 import re
 import json
+import threading
 import urllib.request
 import urllib.parse
 from difflib import SequenceMatcher
 from core.config_manager import CONFIG
 from core.db_manager import log_message
+
+# Fix 1.4: Session-level description cache so the same LinkedIn URL isn't re-fetched
+_LI_DESC_CACHE: dict = {}
+_LI_DESC_LOCK = threading.Lock()
+
+
+def _fetch_linkedin_description(job_url: str, fallback: str) -> str:
+    """Fix 1.4: Fetch full job description from LinkedIn job detail page."""
+    if not job_url or "linkedin.com" not in job_url:
+        return fallback
+    with _LI_DESC_LOCK:
+        if job_url in _LI_DESC_CACHE:
+            return _LI_DESC_CACHE[job_url]
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        req = urllib.request.Request(job_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+        # Extract description from LinkedIn job detail page
+        patterns = [
+            r'<div[^>]*class="[^"]*show-more-less-html__markup[^"]*"[^>]*>(.*?)</div>',
+            r'<section[^>]*class="[^"]*description[^"]*"[^>]*>(.*?)</section>',
+            r'<div[^>]*id="job-details"[^>]*>(.*?)</div>',
+        ]
+        for pat in patterns:
+            m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
+            if m:
+                raw = m.group(1)
+                # Strip HTML tags and normalize whitespace
+                text = re.sub(r'<[^>]+>', ' ', raw)
+                text = re.sub(r'\s+', ' ', text).strip()
+                if len(text) > 100:
+                    with _LI_DESC_LOCK:
+                        _LI_DESC_CACHE[job_url] = text[:3000]
+                    return text[:3000]
+    except Exception:
+        pass
+    with _LI_DESC_LOCK:
+        _LI_DESC_CACHE[job_url] = fallback
+    return fallback
+
 
 def fast_scrape_jobs(query="Software Engineer", location="", limit=20):
     """
@@ -68,13 +113,18 @@ def fast_scrape_jobs(query="Software Engineer", location="", limit=20):
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
+                title_str = titles[i].strip()
+                company_str = companies[i].strip()
+                stub = f"Role: {title_str} at {company_str}."
+                # Fix 1.4: fetch real description (cached per session)
+                desc = _fetch_linkedin_description(url, stub)
                 results.append({
-                    "title": titles[i].strip(),
-                    "company": companies[i].strip(),
+                    "title": title_str,
+                    "company": company_str,
                     "location": location if location else "India",
                     "platform": "LinkedIn",
                     "url": url,
-                    "description": f"Role: {titles[i].strip()} at {companies[i].strip()}."
+                    "description": desc
                 })
             log_message(f"\u26a1 Direct Scraper: Found {len(results)} fast LinkedIn job listings!")
     except Exception as e:

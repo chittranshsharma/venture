@@ -534,25 +534,73 @@ def get_suggested_jobs():
     return records
 
 def export_applications_to_csv(export_path: str) -> bool:
-    """Export SQLite applications table to CSV file."""
+    """Export SQLite applications table including AI evaluation results to CSV file."""
     with DB_LOCK:
         try:
             with _get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT url, title, company, platform, status, reason, applied_at 
+                    SELECT url, title, company, platform, status, score, strengths, gaps, reason, applied_at 
                     FROM applications 
                     ORDER BY id ASC
                 """)
                 rows = cursor.fetchall()
             with open(export_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(["URL", "Title", "Company", "Platform", "Status", "Detail", "Timestamp"])
+                writer.writerow([
+                    "URL", "Title", "Company", "Platform", "Status",
+                    "Match Score (%)", "Strengths", "Gaps", "Reason / Detail", "Applied Timestamp"
+                ])
                 for r in rows:
                     writer.writerow(list(r))
             return True
         except Exception as e:
             log_message(f"Error exporting applications to CSV: {e}")
+            return False
+
+def export_applications_to_json(export_path: str) -> bool:
+    """Export SQLite applications table including full AI evaluation results to JSON file."""
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT url, title, company, platform, status, score, strengths, gaps, reason, applied_at, updated_at
+                    FROM applications 
+                    ORDER BY id ASC
+                """)
+                rows = cursor.fetchall()
+            records = []
+            for r in rows:
+                strengths_val = r[6]
+                gaps_val = r[7]
+                try:
+                    strengths_parsed = json.loads(strengths_val) if strengths_val else []
+                except Exception:
+                    strengths_parsed = strengths_val or []
+                try:
+                    gaps_parsed = json.loads(gaps_val) if gaps_val else []
+                except Exception:
+                    gaps_parsed = gaps_val or []
+
+                records.append({
+                    "url": r[0] or "",
+                    "title": r[1] or "",
+                    "company": r[2] or "",
+                    "platform": r[3] or "",
+                    "status": r[4] or "",
+                    "score": r[5] or 0,
+                    "strengths": strengths_parsed,
+                    "gaps": gaps_parsed,
+                    "reason": r[8] or "",
+                    "applied_at": r[9] or "",
+                    "updated_at": r[10] or ""
+                })
+            with open(export_path, 'w', encoding='utf-8') as f:
+                json.dump(records, f, indent=2)
+            return True
+        except Exception as e:
+            log_message(f"Error exporting applications to JSON: {e}")
             return False
 
 def get_recent_history_text(limit=10) -> str:
