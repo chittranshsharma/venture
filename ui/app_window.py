@@ -31,10 +31,8 @@ class AppWindow(ctk.CTk):
         self.configure(fg_color=C["canvas"])
 
         self.current_view = "dashboard"
-        configure_treeview_style()
-
-        # ── Sidebar Container (Clean Dark Rail with 1px Hairline Right Border) ──
-        self.sidebar = ctk.CTkFrame(self, fg_color=C["sidebar"], corner_radius=0, width=220)
+        configure_treeview_style()        # ── Sidebar Container (Clean Dark Rail with 1px Hairline Right Border) ──
+        self.sidebar = ctk.CTkFrame(self, fg_color=C["sidebar"], corner_radius=0, width=224)
         self.sidebar.pack(side='left', fill='y')
         self.sidebar.pack_propagate(False)
 
@@ -56,50 +54,40 @@ class AppWindow(ctk.CTk):
         brand_sub = ctk.CTkLabel(logo_frame, text="Autonomous Career Engine", font=F["xs"], text_color=C["tertiary"], anchor="w")
         brand_sub.pack(anchor='w', padx=(18, 0), pady=(1, 0))
 
-        # ── Categorized Navigation ──
-        self.nav_btns = {}
-        self.nav_accents = {}
+        # Hairline separator
+        sep = ctk.CTkFrame(self.sidebar, fg_color=C["border"], height=1, corner_radius=0)
+        sep.pack(fill='x', padx=16, pady=(12, 10))
 
-        nav_groups = [
+        # ── Navigation Items ──
+        self.nav_btns = {}
+
+        nav_sections = [
             ("WORKSPACE", [
-                ('dashboard',   '⌂', 'Overview'),
+                ('dashboard',   '⊞', 'Dashboard'),
                 ('suggestions', '◎', 'Opportunities'),
-                ('approvals',   '✓', 'Approvals'),
-                ('history',     '↗', 'Applications'),
+                ('approvals',   '⚑', 'Approvals'),
+                ('history',     '☰', 'Applied History'),
             ]),
             ("INTELLIGENCE", [
-                ('ai_focus',    '✦', 'Venture AI'),
-                ('radar_action','⌁', 'Radar'),
-                ('contacts',    '◎', 'Recruiters'),
-            ]),
-            ("PROFILE", [
-                ('profile',     '◇', 'Profile & QA'),
-                ('accounts',    '⚿', 'Credentials'),
+                ('contacts',    '📇', 'Recruiters'),
+                ('profile',     '◉', 'Profile & QA'),
             ]),
             ("SYSTEM", [
+                ('accounts',    '🔒', 'Credentials'),
                 ('settings',    '⚙', 'Settings'),
             ])
         ]
 
-        for group_title, items in nav_groups:
-            # Group Header
+        for group_title, items in nav_sections:
             lbl_group = ctk.CTkLabel(
                 self.sidebar, text=group_title,
                 font=F["xs_b"], text_color=C["tertiary"], anchor="w"
             )
-            lbl_group.pack(fill='x', padx=18, pady=(14, 4))
+            lbl_group.pack(fill='x', padx=16, pady=(8, 2))
 
-            # Buttons
             for name, icon, label in items:
-                btn_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-                btn_frame.pack(fill='x', padx=10, pady=1)
-
-                accent_bar = ctk.CTkFrame(btn_frame, fg_color="transparent", width=2, corner_radius=1)
-                accent_bar.pack(side='left', fill='y', pady=4)
-                self.nav_accents[name] = accent_bar
-
                 btn = ctk.CTkButton(
-                    btn_frame,
+                    self.sidebar,
                     text=f"  {icon}   {label}",
                     anchor="w",
                     font=F["nav"],
@@ -107,30 +95,30 @@ class AppWindow(ctk.CTk):
                     hover_color=C["card_hover"],
                     text_color=C["secondary"],
                     corner_radius=6,
-                    height=32,
+                    height=34,
                     border_width=0,
                     cursor="hand2",
-                    command=lambda n=name: self.handle_nav_click(n)
+                    command=lambda n=name: self.show_view(n)
                 )
-                btn.pack(side='left', fill='x', expand=True, padx=(4, 0))
+                btn.pack(fill='x', padx=10, pady=2)
                 self.nav_btns[name] = btn
 
         # ── Sidebar Bottom Status Pill ──
         status_card = ctk.CTkFrame(
             self.sidebar, fg_color=C["elevated"], corner_radius=6,
-            border_width=1, border_color=C["border"]
+            border_width=1, border_color=C["border"], height=36
         )
-        status_card.pack(side='bottom', fill='x', padx=14, pady=14)
+        status_card.pack(side='bottom', fill='x', padx=12, pady=12)
 
         self.status_dot = ctk.CTkLabel(status_card, text="●", font=("Arial", 9), text_color=C["green"], width=14)
-        self.status_dot.pack(side='left', padx=(10, 2), pady=7)
+        self.status_dot.pack(side='left', padx=(10, 2), pady=8)
 
         self.status_var = tk.StringVar(value="Agent Idle")
         self.status_lbl = ctk.CTkLabel(
             status_card, textvariable=self.status_var,
             font=F["xs"], text_color=C["secondary"], anchor="w"
         )
-        self.status_lbl.pack(side='left', padx=(2, 10), pady=7)
+        self.status_lbl.pack(side='left', padx=(2, 10), pady=8)
 
         # ── Main Content Container ──
         self.container = ctk.CTkFrame(self, fg_color="transparent")
@@ -155,17 +143,6 @@ class AppWindow(ctk.CTk):
         self.attributes('-topmost', True)
         self.after_idle(self.attributes, '-topmost', False)
         self.focus_force()
-
-    def handle_nav_click(self, name):
-        if name == 'ai_focus':
-            self.show_view('dashboard')
-            if 'dashboard' in self.views and hasattr(self.views['dashboard'], 'chat_input'):
-                self.views['dashboard'].chat_input.focus_set()
-        elif name == 'radar_action':
-            if 'dashboard' in self.views and hasattr(self.views['dashboard'], 'toggle_radar_action'):
-                self.views['dashboard'].toggle_radar_action()
-        else:
-            self.show_view(name)
 
     def _update_ai_status_async(self):
         def _check():
@@ -289,15 +266,13 @@ class AppWindow(ctk.CTk):
         sug_count = getattr(state, 'SUGGESTION_COUNT', 0)
 
         nav_labels = {
-            'dashboard':   ('⌂', 'Overview'),
+            'dashboard':   ('⊞', 'Dashboard'),
             'suggestions': ('◎', 'Opportunities'),
-            'approvals':   ('✓', 'Approvals'),
-            'history':     ('↗', 'Applications'),
-            'ai_focus':    ('✦', 'Venture AI'),
-            'radar_action':('⌁', 'Radar'),
-            'contacts':    ('◎', 'Recruiters'),
-            'profile':     ('◇', 'Profile & QA'),
-            'accounts':    ('⚿', 'Credentials'),
+            'approvals':   ('⚑', 'Approvals'),
+            'history':     ('☰', 'Applied History'),
+            'contacts':    ('📇', 'Recruiters'),
+            'profile':     ('◉', 'Profile & QA'),
+            'accounts':    ('🔒', 'Credentials'),
             'settings':    ('⚙', 'Settings'),
         }
 
@@ -315,20 +290,23 @@ class AppWindow(ctk.CTk):
                 text = f"  {icon}   {base_label}"
                 text_color = C["text"] if is_active else C["secondary"]
 
-            fg_color = C["elevated"] if is_active else "transparent"
-            font = F["nav_a"] if is_active else F["nav"]
-
-            btn.configure(
-                text=text,
-                fg_color=fg_color,
-                text_color=text_color,
-                font=font,
-            )
-
-            # Left hairline accent
-            if name in self.nav_accents:
-                bar_color = C["accent"] if is_active else "transparent"
-                self.nav_accents[name].configure(fg_color=bar_color)
+            if is_active:
+                btn.configure(
+                    text=text,
+                    fg_color=C["elevated"],
+                    text_color=C["text"],
+                    font=F["nav_a"],
+                    border_width=1,
+                    border_color=C["border"]
+                )
+            else:
+                btn.configure(
+                    text=text,
+                    fg_color="transparent",
+                    text_color=text_color,
+                    font=F["nav"],
+                    border_width=0
+                )
 
     def execute_chat_command(self, cmd):
         c_type = cmd.get("type")
