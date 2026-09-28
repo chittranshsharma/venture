@@ -31,7 +31,9 @@ class AppWindow(ctk.CTk):
         self.configure(fg_color=C["canvas"])
 
         self.current_view = "dashboard"
-        configure_treeview_style()        # ── Sidebar Container (Clean Dark Rail with 1px Hairline Right Border) ──
+        configure_treeview_style()
+
+        # ── Sidebar Container (Clean Dark Rail with 1px Hairline Right Border) ──
         self.sidebar = ctk.CTkFrame(self, fg_color=C["sidebar"], corner_radius=0, width=224)
         self.sidebar.pack(side='left', fill='y')
         self.sidebar.pack_propagate(False)
@@ -66,14 +68,19 @@ class AppWindow(ctk.CTk):
                 ('dashboard',   '⊞', 'Dashboard'),
                 ('suggestions', '◎', 'Opportunities'),
                 ('approvals',   '⚑', 'Approvals'),
-                ('history',     '☰', 'Applied History'),
+                ('history',     '☰', 'Applications'),
             ]),
             ("INTELLIGENCE", [
+                ('venture_ai',  '✦', 'VENTURE AI'),
+                ('radar',       '◬', 'Radar'),
                 ('contacts',    '📇', 'Recruiters'),
-                ('profile',     '◉', 'Profile & QA'),
+            ]),
+            ("PROFILE", [
+                ('profile',     '◉', 'Profile'),
+                ('resume',      '📄', 'Resume'),
+                ('accounts',    '🔒', 'Credentials'),
             ]),
             ("SYSTEM", [
-                ('accounts',    '🔒', 'Credentials'),
                 ('settings',    '⚙', 'Settings'),
             ])
         ]
@@ -83,7 +90,7 @@ class AppWindow(ctk.CTk):
                 self.sidebar, text=group_title,
                 font=F["xs_b"], text_color=C["tertiary"], anchor="w"
             )
-            lbl_group.pack(fill='x', padx=16, pady=(8, 2))
+            lbl_group.pack(fill='x', padx=16, pady=(10, 2))
 
             for name, icon, label in items:
                 btn = ctk.CTkButton(
@@ -95,12 +102,12 @@ class AppWindow(ctk.CTk):
                     hover_color=C["card_hover"],
                     text_color=C["secondary"],
                     corner_radius=6,
-                    height=34,
+                    height=32,
                     border_width=0,
                     cursor="hand2",
                     command=lambda n=name: self.show_view(n)
                 )
-                btn.pack(fill='x', padx=10, pady=2)
+                btn.pack(fill='x', padx=10, pady=1)
                 self.nav_btns[name] = btn
 
         # ── Sidebar Bottom Status Pill ──
@@ -240,23 +247,36 @@ class AppWindow(ctk.CTk):
         self._update_ai_status_async()
 
     def show_view(self, name):
-        if name not in self.views:
+        target_view = name
+        if name in ('venture_ai', 'radar'):
+            target_view = 'dashboard'
+        elif name == 'resume':
+            target_view = 'profile'
+
+        if target_view not in self.views:
             return
         self.current_view = name
 
         def _switch():
             for v in self.views.values():
                 v.pack_forget()
-            self.views[name].pack(fill='both', expand=True)
+            self.views[target_view].pack(fill='both', expand=True)
             self.refresh_nav_buttons()
 
-            if name == 'history':
+            if name == 'venture_ai' and hasattr(self.views['dashboard'], 'chat_input'):
+                self.views['dashboard'].chat_input.focus_set()
+            elif name == 'radar' and hasattr(self.views['dashboard'], 'toggle_radar_action'):
+                self.views['dashboard'].toggle_radar_action()
+            elif name == 'resume' and hasattr(self.views['profile'], 'prof_resume'):
+                self.views['profile'].prof_resume.focus_set()
+
+            if target_view == 'history':
                 self.views['history'].load_history_table()
-            elif name == 'suggestions':
+            elif target_view == 'suggestions':
                 self.views['suggestions'].load_suggestions_table()
-            elif name == 'approvals':
+            elif target_view == 'approvals':
                 self.views['approvals'].load_approvals_table()
-            elif name == 'contacts':
+            elif target_view == 'contacts':
                 self.views['contacts'].load_contacts_table()
 
         animate_view_transition(self.container, _switch)
@@ -269,15 +289,18 @@ class AppWindow(ctk.CTk):
             'dashboard':   ('⊞', 'Dashboard'),
             'suggestions': ('◎', 'Opportunities'),
             'approvals':   ('⚑', 'Approvals'),
-            'history':     ('☰', 'Applied History'),
+            'history':     ('☰', 'Applications'),
+            'venture_ai':  ('✦', 'VENTURE AI'),
+            'radar':       ('◬', 'Radar'),
             'contacts':    ('📇', 'Recruiters'),
-            'profile':     ('◉', 'Profile & QA'),
+            'profile':     ('◉', 'Profile'),
+            'resume':      ('📄', 'Resume'),
             'accounts':    ('🔒', 'Credentials'),
             'settings':    ('⚙', 'Settings'),
         }
 
         for name, btn in self.nav_btns.items():
-            is_active = self.current_view == name
+            is_active = (self.current_view == name)
             icon, base_label = nav_labels.get(name, ('•', name.capitalize()))
 
             if name == 'approvals' and doubt_count > 0:

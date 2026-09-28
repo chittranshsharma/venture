@@ -366,9 +366,9 @@ The application follows a **quiet, dark, restrained, technical, and premium** ae
    - Brand identifier (`◆ VENTURE v3.5`) and operational descriptor (`Autonomous Career Engine`).
    - Technical Telemetry Triad: `● CORE: Qwen 2.5 7B`, `● RADAR: Active/Idle`, `● DB: Synced`.
 2. **Categorized Sidebar (`ui/app_window.py`):**
-   - `WORKSPACE`: Overview, Opportunities, Approvals, Applications.
-   - `INTELLIGENCE`: Venture AI, Radar, Recruiters.
-   - `PROFILE`: Profile & QA, Credentials.
+   - `WORKSPACE`: Dashboard, Opportunities, Approvals, Applications.
+   - `INTELLIGENCE`: VENTURE AI, Radar, Recruiters.
+   - `PROFILE`: Profile, Resume, Credentials.
    - `SYSTEM`: Settings.
 3. **Control Dashboard (`ui/dashboard_view.py`):**
    - **Central Hero Status Card:** Agent state (`VENTURE ACTIVE` or `VENTURE STANDBY`), evaluated metrics summary, and restrained controls (`[Start agent]` filled, `Pause` ghost, `Radar` ghost).
@@ -487,7 +487,7 @@ The application follows a **quiet, dark, restrained, technical, and premium** ae
 
 When reading, updating, or debugging this codebase, adhere strictly to the following architectural invariants:
 
-1. **Warm Ink Palette Invariant:** Under NO circumstances introduce electric cyan, neon blue, or bright saturation into the UI. All components must strictly reference tokens from `C` in `ui/components.py` matching the Resend-inspired Warm Ink / Dark Editorial aesthetic (`#151210`, `#1E1B17`, `#F0EBE3`, `#D4A843`).
+1. **Linear / Raycast Dark Aesthetic Invariant:** Under NO circumstances introduce electric cyan, neon blue, or bright saturation into the UI. All components must strictly reference tokens from `C` in `ui/components.py` matching the quiet, restrained, technical dark palette (`#0F0F0D`, `#11110F`, `#171614`, `#1C1B18`, `#282621`, `#E8E5DE`, `#9A968D`, `#66635C`).
 2. **Atomic SQLite Transactions:** Never execute raw SQLite commands without acquiring `with DB_LOCK:` or `_get_connection()`. The app runs multiple background threads (Radar, Playwright, StatusTracker, Tkinter event loop).
 3. **FSM Enforcement:** Always route application status changes through `core.state_machine.transition(url, new_state)` to ensure crash-recovery validity.
 4. **Deterministic LLM Output:** When querying Ollama or Cloud LLMs, use temperature `0.1` and extract JSON using brace-depth matching (`_extract_json_from_text`) rather than assuming raw markdown formatting.

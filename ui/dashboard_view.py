@@ -77,17 +77,17 @@ class DashboardView(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
 
-        # ── 1. Central Hero: "Venture Status" Card ──
+        # ── 1. Central Hero: "Venture Status" Card with Strong Hierarchy ──
         self.hero_card = ctk.CTkFrame(
-            self, fg_color=C["card"], corner_radius=10,
+            self, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"]
         )
-        self.hero_card.pack(fill='x', pady=(0, 12))
+        self.hero_card.pack(fill='x', pady=(0, 14))
 
         hero_inner = ctk.CTkFrame(self.hero_card, fg_color="transparent")
-        hero_inner.pack(fill='x', padx=18, pady=16)
+        hero_inner.pack(fill='x', padx=20, pady=18)
 
-        # Left: Agent state & operational summary
+        # Left: Clean 3-tier hierarchy (Title -> Concept -> Telemetry)
         hero_left = ctk.CTkFrame(hero_inner, fg_color="transparent")
         hero_left.pack(side='left', fill='both', expand=True)
 
@@ -102,7 +102,7 @@ class DashboardView(ctk.CTkFrame):
 
         self.hero_status_title = ctk.CTkLabel(
             status_header_row, text="VENTURE STANDBY",
-            font=F["h2"], text_color=C["text"], anchor="w"
+            font=("Segoe UI", 18, "bold"), text_color=C["text"], anchor="w"
         )
         self.hero_status_title.pack(side='left')
 
@@ -112,12 +112,20 @@ class DashboardView(ctk.CTkFrame):
         )
         self.hero_runtime_lbl.pack(side='left', padx=(12, 0))
 
-        self.hero_subtext_lbl = ctk.CTkLabel(
+        self.hero_sub_primary = ctk.CTkLabel(
             hero_left,
-            text="Autonomous career engine idle · 3 sources armed · Ready for instruction",
-            font=F["xs"], text_color=C["secondary"], anchor="w"
+            text="Autonomous career engine",
+            font=F["body"], text_color=C["body"], anchor="w"
         )
-        self.hero_subtext_lbl.pack(anchor='w', pady=(4, 0))
+        self.hero_sub_primary.pack(anchor='w', pady=(4, 0))
+
+        num_sources = len(CONFIG.get("settings", {}).get("target_platforms", [])) + len(CONFIG.get("settings", {}).get("company_career_pages", []))
+        self.hero_sub_secondary = ctk.CTkLabel(
+            hero_left,
+            text=f"{num_sources} sources armed · 0 evaluated",
+            font=F["xs"], text_color=C["tertiary"], anchor="w"
+        )
+        self.hero_sub_secondary.pack(anchor='w', pady=(2, 0))
 
         # Right: Restrained Action Controls
         hero_right = ctk.CTkFrame(hero_inner, fg_color="transparent")
@@ -138,29 +146,32 @@ class DashboardView(ctk.CTkFrame):
         )
         self.btn_toggle.pack(side='right')
 
-        # ── 2. Metric Cards Row ──
+        # ── 2. Metric Cards Row with Differentiated Hierarchy ──
         metrics_frame = ctk.CTkFrame(self, fg_color="transparent")
-        metrics_frame.pack(fill='x', pady=(0, 10))
+        metrics_frame.pack(fill='x', pady=(0, 12))
         metrics_frame.columnconfigure((0, 1, 2, 3), weight=1, uniform="equal")
 
-        self.metric_opps       = self.create_metric_card(metrics_frame, "OPPORTUNITIES FOUND", "0", 0, "total evaluated")
-        self.metric_high_fit   = self.create_metric_card(metrics_frame, "HIGH FIT LEADS", "0", 1, ">=70% semantic match")
-        self.metric_applied    = self.create_metric_card(metrics_frame, "APPLICATIONS SENT", "0", 2, "verified pipeline")
-        self.metric_interviews = self.create_metric_card(metrics_frame, "INTERVIEWS SCHEDULED", "0", 3, "active leads")
+        min_score = CONFIG.get("settings", {}).get("min_score", 70)
+        # Prominent intelligence metrics
+        self.metric_opps       = self.create_metric_card(metrics_frame, "OPPORTUNITIES FOUND", "0", 0, "total evaluated", prominent=True)
+        self.metric_high_fit   = self.create_metric_card(metrics_frame, "HIGH-FIT LEADS", "0", 1, f"≥{min_score}% semantic match", prominent=True)
+        # Secondary outcome metrics
+        self.metric_applied    = self.create_metric_card(metrics_frame, "APPLICATIONS SENT", "0", 2, "verified pipeline", prominent=False)
+        self.metric_interviews = self.create_metric_card(metrics_frame, "INTERVIEWS SCHEDULED", "0", 3, "active leads", prominent=False)
 
-        # ── 3. Visual Opportunity Pipeline Bar ──
+        # ── 3. Visual Opportunity Pipeline Bar with Breathing Room ──
         self.pipeline_card = ctk.CTkFrame(
             self, fg_color=C["card"], corner_radius=8,
-            border_width=1, border_color=C["border"], height=42
+            border_width=1, border_color=C["border"], height=46
         )
-        self.pipeline_card.pack(fill='x', pady=(0, 12))
+        self.pipeline_card.pack(fill='x', pady=(0, 14))
         self.pipeline_card.pack_propagate(False)
 
         self.pipeline_canvas = tk.Canvas(
             self.pipeline_card, bg=C["card"],
             highlightthickness=0, bd=0
         )
-        self.pipeline_canvas.pack(fill='both', expand=True, padx=12, pady=4)
+        self.pipeline_canvas.pack(fill='both', expand=True, padx=16, pady=4)
         self.pipeline_canvas.bind("<Configure>", lambda e: self.draw_pipeline_flow())
 
         # ── 4. Workspace 2-Column Split: Activity Stream & AI Console ──
@@ -172,20 +183,20 @@ class DashboardView(ctk.CTkFrame):
 
         # ── Left Column: Live Engineering Activity Stream ──
         activity_card = ctk.CTkFrame(
-            workspace_frame, fg_color=C["deep"], corner_radius=10,
+            workspace_frame, fg_color=C["deep"], corner_radius=8,
             border_width=1, border_color=C["border"]
         )
         activity_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8), pady=0)
 
-        activity_header = ctk.CTkFrame(activity_card, fg_color="transparent", height=34)
+        activity_header = ctk.CTkFrame(activity_card, fg_color="transparent", height=32)
         activity_header.pack(fill='x', padx=14, pady=(10, 4))
         activity_header.pack_propagate(False)
 
         dots = ctk.CTkFrame(activity_header, fg_color="transparent")
         dots.pack(side='left', pady=4)
-        ctk.CTkLabel(dots, text="●", font=("Arial", 10), text_color=C["red"], width=13).pack(side='left')
-        ctk.CTkLabel(dots, text="●", font=("Arial", 10), text_color=C["amber"], width=13).pack(side='left')
-        ctk.CTkLabel(dots, text="●", font=("Arial", 10), text_color=C["green"], width=13).pack(side='left')
+        ctk.CTkLabel(dots, text="●", font=("Arial", 9), text_color=C["red"], width=12).pack(side='left')
+        ctk.CTkLabel(dots, text="●", font=("Arial", 9), text_color=C["amber"], width=12).pack(side='left')
+        ctk.CTkLabel(dots, text="●", font=("Arial", 9), text_color=C["green"], width=12).pack(side='left')
 
         lbl_log_title = ctk.CTkLabel(
             activity_header, text=" VENTURE / ACTIVITY",
@@ -198,13 +209,13 @@ class DashboardView(ctk.CTkFrame):
             activity_header, textvariable=self.log_search_var,
             placeholder_text="Filter activity...",
             fg_color=C["input"], border_color=C["border"],
-            text_color=C["text"], font=F["xs"], width=140, height=24, corner_radius=4,
+            text_color=C["text"], font=F["xs"], width=130, height=22, corner_radius=4,
             border_width=1
         )
         log_search.pack(side='right')
 
         logs_inner = ctk.CTkFrame(activity_card, fg_color="transparent")
-        logs_inner.pack(fill='both', expand=True, padx=12, pady=(0, 10))
+        logs_inner.pack(fill='both', expand=True, padx=12, pady=(0, 8))
 
         self.logs_box = scrolledtext.ScrolledText(
             logs_inner, bg=C["deep"], fg=C["body"],
@@ -218,12 +229,12 @@ class DashboardView(ctk.CTkFrame):
 
         # ── Right Column: AI Assistant Console (Restrained Agent Workspace) ──
         chat_card = ctk.CTkFrame(
-            workspace_frame, fg_color=C["card"], corner_radius=10,
+            workspace_frame, fg_color=C["card"], corner_radius=8,
             border_width=1, border_color=C["border"]
         )
         chat_card.grid(row=0, column=1, sticky='nsew', padx=(8, 0), pady=0)
 
-        chat_header = ctk.CTkFrame(chat_card, fg_color="transparent", height=34)
+        chat_header = ctk.CTkFrame(chat_card, fg_color="transparent", height=32)
         chat_header.pack(fill='x', padx=14, pady=(10, 4))
         chat_header.pack_propagate(False)
 
@@ -244,7 +255,7 @@ class DashboardView(ctk.CTkFrame):
             chat_card, fg_color=C["deep"], corner_radius=6,
             border_width=1, border_color=C["border"]
         )
-        chat_inner.pack(fill='both', expand=True, padx=12, pady=(0, 10))
+        chat_inner.pack(fill='both', expand=True, padx=12, pady=(0, 8))
 
         self.chat_history = scrolledtext.ScrolledText(
             chat_inner, bg=C["deep"], fg=C["body"],
@@ -253,7 +264,7 @@ class DashboardView(ctk.CTkFrame):
         )
         self.chat_history.pack(fill='both', expand=True, padx=8, pady=8)
 
-        # Quick action chips row (shown in empty state)
+        # Quick action chips row
         self.quick_chips_frame = ctk.CTkFrame(chat_card, fg_color="transparent")
         self.quick_chips_frame.pack(fill='x', padx=12, pady=(0, 8))
 
@@ -295,27 +306,38 @@ class DashboardView(ctk.CTkFrame):
         self._seed_initial_activity()
         self._seed_initial_chat()
 
-    # ── Metric Card Builder ──
-    def create_metric_card(self, parent, label, val, col, subtext=""):
+    # ── Differentiated Metric Card Builder ──
+    def create_metric_card(self, parent, label, val, col, subtext="", prominent=False):
+        border_col = C["border"] if prominent else C["hairline"]
         card = ctk.CTkFrame(
             parent, fg_color=C["card"], corner_radius=8,
-            border_width=1, border_color=C["border"]
+            border_width=1, border_color=border_col
         )
         card.grid(row=0, column=col, sticky='nsew', padx=4, pady=0)
 
-        lbl_lbl = ctk.CTkLabel(card, text=label, font=F["xs_b"], text_color=C["tertiary"], anchor="w")
-        lbl_lbl.pack(anchor='w', padx=14, pady=(12, 0))
+        val_font = ("Segoe UI", 26, "bold") if prominent else ("Segoe UI", 20, "bold")
+        val_color = C["text"] if prominent else C["secondary"]
+        lbl_color = C["secondary"] if prominent else C["tertiary"]
 
-        lbl_val = ctk.CTkLabel(card, text=val, font=F["metric"], text_color=C["text"], anchor="w")
-        lbl_val.pack(anchor='w', padx=14, pady=(2, 2))
+        lbl_val = ctk.CTkLabel(card, text=val, font=val_font, text_color=val_color, anchor="w")
+        lbl_val.pack(anchor='w', padx=14, pady=(12, 0))
+
+        lbl_lbl = ctk.CTkLabel(card, text=label, font=F["xs_b"], text_color=lbl_color, anchor="w")
+        lbl_lbl.pack(anchor='w', padx=14, pady=(2, 0))
+
+        if prominent:
+            sep = ctk.CTkFrame(card, fg_color=C["hairline_strong"], height=1)
+            sep.pack(fill='x', padx=14, pady=(6, 4))
+        else:
+            ctk.CTkFrame(card, fg_color="transparent", height=4).pack()
 
         if subtext:
-            lbl_sub = ctk.CTkLabel(card, text=subtext, font=F["xs"], text_color=C["secondary"], anchor="w")
+            lbl_sub = ctk.CTkLabel(card, text=subtext, font=F["xs"], text_color=C["tertiary"], anchor="w")
             lbl_sub.pack(anchor='w', padx=14, pady=(0, 10))
 
         return lbl_val
 
-    # ── Pipeline Visualization ──
+    # ── Pipeline Visualization (Breathing Room + Subtle Active Brightness) ──
     def draw_pipeline_flow(self, stats=None):
         self.pipeline_canvas.delete("all")
         s = stats or _get_stats()
@@ -326,22 +348,49 @@ class DashboardView(ctk.CTkFrame):
         w = self.pipeline_canvas.winfo_width()
         h = self.pipeline_canvas.winfo_height()
         if w < 100: w = 700
-        if h < 20: h = 34
+        if h < 20: h = 38
 
         n = len(stages)
         col_w = w / n
+
+        # Determine current active stage
+        active_idx = 0
+        if state.BOT_RUNNING:
+            st = (state.CURRENT_STATUS or "").lower()
+            if "apply" in st or "submit" in st: active_idx = 3
+            elif "match" in st or "eval" in st: active_idx = 1
+            else: active_idx = 0
+        else:
+            # Highlight latest non-zero stage
+            for i in range(len(stages) - 1, -1, -1):
+                if stages[i][1] > 0:
+                    active_idx = i
+                    break
 
         for idx, (name, count) in enumerate(stages):
             cx = idx * col_w + col_w / 2
             cy = h / 2
 
-            # Stage Count + Name
+            is_current = (idx == active_idx)
             text_stage = f"{name}  {count}"
-            self.pipeline_canvas.create_text(
-                cx, cy, text=text_stage,
-                fill=C["text"] if count > 0 else C["tertiary"],
-                font=F["xs_b"]
-            )
+
+            if is_current:
+                # Subtle tonal active indicator (no color, pure tonal brightness)
+                box_w = max(len(text_stage) * 7 + 16, 70)
+                self.pipeline_canvas.create_rectangle(
+                    cx - box_w / 2, cy - 12, cx + box_w / 2, cy + 12,
+                    fill=C["elevated"], outline=C["border"], width=1
+                )
+                self.pipeline_canvas.create_text(
+                    cx, cy, text=text_stage,
+                    fill=C["text"], font=F["xs_b"]
+                )
+            else:
+                self.pipeline_canvas.create_text(
+                    cx, cy, text=text_stage,
+                    fill=C["tertiary"] if count == 0 else C["secondary"],
+                    font=F["xs"]
+                )
 
             # Connector arrow
             if idx < n - 1:
@@ -351,7 +400,7 @@ class DashboardView(ctk.CTkFrame):
                     fill=C["tertiary"], font=F["xs"]
                 )
 
-    # ── Activity Stream Logging ──
+    # ── Activity Stream (Denser Vertically + Intentional SYSTEM IDLE) ──
     def _configure_log_tags(self):
         self.logs_box.tag_config("ts", foreground=C["tertiary"], font=F["mono_sm"])
         self.logs_box.tag_config("radar", foreground=C["blue"], font=F["mono_sm"])
@@ -362,17 +411,19 @@ class DashboardView(ctk.CTkFrame):
         self.logs_box.tag_config("body", foreground=C["body"], font=F["mono_sm"])
 
     def _seed_initial_activity(self):
-        """Populate initial engineering telemetry so console never appears empty."""
         now = datetime.now()
         t1 = (now - timedelta(seconds=12)).strftime("%H:%M:%S")
         t2 = (now - timedelta(seconds=8)).strftime("%H:%M:%S")
         t3 = (now - timedelta(seconds=3)).strftime("%H:%M:%S")
         t4 = now.strftime("%H:%M:%S")
 
-        self._append_activity_entry(t1, "SYSTEM", "Neural embedding engine initialized (all-MiniLM-L6-v2 · 384 dim)")
-        self._append_activity_entry(t2, "DATABASE", "SQLite database verified: venture.db (WAL mode active)")
-        self._append_activity_entry(t3, "RADAR", f"Autonomous background poller ready ({len(CONFIG.get('settings', {}).get('queries', []))} queries loaded)")
-        self._append_activity_entry(t4, "PIPELINE", "System armed · Ready for operator instruction")
+        self._append_activity_entry(t1, "SYSTEM", "Neural embedding engine initialized")
+        self._append_activity_entry(t2, "DATABASE", "SQLite database verified (WAL mode)")
+        self._append_activity_entry(t3, "RADAR", f"Background poller ready ({len(CONFIG.get('settings', {}).get('queries', []))} queries)")
+        self._append_activity_entry(t4, "PIPELINE", "Awaiting operator instruction")
+
+        self.logs_box.insert('end', "────────────────────────────────────────────────\n", "ts")
+        self.logs_box.insert('end', "                   SYSTEM IDLE\n", "ts")
 
     def _append_activity_entry(self, timestamp, tag, message):
         tag_key = "sys"
@@ -392,16 +443,13 @@ class DashboardView(ctk.CTkFrame):
             return
         search_query = self.log_search_var.get().strip().lower()
 
-        # Update with real state logs
         if state.LOG_QUEUE:
             self.logs_box.delete('1.0', 'end')
             for log in state.LOG_QUEUE:
                 if not search_query or search_query in log.lower():
-                    # Parse timestamp if present
                     ts_match = re.match(r'(\d{2}:\d{2}:\d{2})\s*(.*)', log)
                     if ts_match:
                         ts, rest = ts_match.groups()
-                        # Extract tag
                         tag_match = re.match(r'\[(.*?)\]\s*(.*)', rest)
                         if tag_match:
                             tag, content = tag_match.groups()
@@ -413,13 +461,13 @@ class DashboardView(ctk.CTkFrame):
                         self._append_activity_entry(now_str, "LOG", log)
             self.logs_box.see('end')
 
-    # ── AI Console Logic ──
+    # ── AI Console Logic (Agentic & Calm Personality) ──
     def _seed_initial_chat(self):
         self.chat_history.configure(state='normal')
         self.chat_history.insert('end', "VENTURE\n", "ai_tag")
         self.chat_history.insert(
             'end',
-            "Autonomous career operations agent online. I continuously scan job boards, evaluate semantic fit, and manage your application pipeline.\n\nWhat should I work on?\n\n",
+            "System ready.\n\nI can search for opportunities, evaluate your fit,\nanalyze your profile, or inspect the application pipeline.\n\nWhat should I work on?\n\n",
             "ai_body"
         )
         self.chat_history.tag_config("ai_tag", foreground=C["accent"], font=F["mono_sm"])
@@ -436,7 +484,6 @@ class DashboardView(ctk.CTkFrame):
         if not msg:
             return
 
-        # Hide quick chips once chatting
         if hasattr(self, 'quick_chips_frame'):
             self.quick_chips_frame.pack_forget()
 
@@ -604,21 +651,24 @@ If the user updates expected CTC, include: [COMMAND: {{"type": "update_qa_vault"
         self.metric_applied.configure(text=str(s["applied"]))
         self.metric_interviews.configure(text=str(s["interview"]))
 
-        # Hero Status Text
+        # Hero Status Text with Refined Hierarchy
         num_sources = len(CONFIG.get("settings", {}).get("target_platforms", [])) + len(CONFIG.get("settings", {}).get("company_career_pages", []))
         if state.BOT_RUNNING and state.BOT_PAUSED:
             self.hero_status_dot.configure(text_color=C["amber"])
             self.hero_status_title.configure(text="VENTURE PAUSED")
-            self.hero_subtext_lbl.configure(text=f"Pipeline on hold · {s['opportunities']} evaluated · {s['high_fit']} high-fit matches")
+            self.hero_sub_primary.configure(text="Pipeline suspended by operator")
+            self.hero_sub_secondary.configure(text=f"{num_sources} sources on hold · {s['opportunities']} evaluated · {s['high_fit']} high-fit")
         elif state.BOT_RUNNING:
             self.hero_status_dot.configure(text_color=C["green"])
             self.hero_status_title.configure(text="VENTURE ACTIVE")
             status_line = state.CURRENT_STATUS or f"Scanning {num_sources} sources"
-            self.hero_subtext_lbl.configure(text=f"{status_line} · {s['opportunities']} evaluated · {s['high_fit']} high-fit")
+            self.hero_sub_primary.configure(text=status_line)
+            self.hero_sub_secondary.configure(text=f"{num_sources} sources active · {s['opportunities']} evaluated · {s['high_fit']} high-fit")
         else:
             self.hero_status_dot.configure(text_color=C["dim"])
             self.hero_status_title.configure(text="VENTURE STANDBY")
-            self.hero_subtext_lbl.configure(text=f"Autonomous career engine idle · {num_sources} sources armed · {s['opportunities']} evaluated")
+            self.hero_sub_primary.configure(text="Autonomous career engine")
+            self.hero_sub_secondary.configure(text=f"{num_sources} sources armed · {s['opportunities']} evaluated")
 
         # Session Runtime
         session_start = state.SESSION_STATS.get("session_start")
