@@ -15,7 +15,7 @@ from datetime import datetime
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.config_manager import CONFIG, BASE_DIR, load_config
 from core.resume_parser import extract_resume_text
@@ -108,6 +108,101 @@ def _build_form_answers(candidate: Dict[str, Any], qa_vault: Dict[str, Any]) -> 
         "veteran_status": qa_vault.get("veteran_status", "Decline to Self-Identify"),
         "disability_status": qa_vault.get("disability_status", "Decline to Self-Identify"),
     }
+
+
+def resolve_form_question(
+    question_text: str,
+    qa_vault: Dict[str, Any],
+    candidate: Dict[str, Any]
+) -> Tuple[Optional[str], str]:
+    """
+    Deterministically resolves an ATS form question against candidate qa_vault & profile.
+    Safety Invariant: NEVER guesses with LLM on work auth, sponsorship, salary, demographic, or legal fields.
+    Returns:
+      (answer_string, "VAULT_MATCH") if mapped from vault/profile,
+      (None, "NEEDS_HUMAN") if unrecognized or unpopulated in qa_vault.
+    """
+    q = (question_text or "").lower().strip()
+    if not q:
+        return (None, "NEEDS_HUMAN")
+
+    # Work Authorization
+    if re.search(r"\b(legally authorized|work authorization|authorized to work|eligible to work|legal right to work)\b", q):
+        val = qa_vault.get("work_authorization")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Visa Sponsorship
+    if re.search(r"\b(visa sponsorship|require sponsorship|require.*visa|future sponsorship)\b", q):
+        val = qa_vault.get("sponsorship_required") or qa_vault.get("require_sponsorship")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Salary / Compensation / CTC
+    if re.search(r"\b(expected salary|desired salary|expected compensation|expected ctc|desired ctc|salary expectation)\b", q):
+        val = qa_vault.get("expected_ctc") or qa_vault.get("expected_salary") or qa_vault.get("expected_stipend")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    if re.search(r"\b(current salary|current ctc|current compensation)\b", q):
+        val = qa_vault.get("current_ctc") or qa_vault.get("current_salary")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Notice Period
+    if re.search(r"\b(notice period|how soon can you start|earliest start date|availability)\b", q):
+        val = qa_vault.get("notice_period")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Experience
+    if re.search(r"\b(years of experience|total experience|how many years.*experience)\b", q):
+        val = qa_vault.get("experience_years") or candidate.get("experience_years")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Relocation
+    if re.search(r"\b(willing to relocate|open to relocate|relocation)\b", q):
+        val = qa_vault.get("willing_to_relocate")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Gender
+    if re.search(r"\b(gender|sex)\b", q):
+        val = qa_vault.get("gender")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Veteran Status
+    if re.search(r"\b(veteran status|protected veteran)\b", q):
+        val = qa_vault.get("veteran_status")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Disability Status
+    if re.search(r"\b(disability status|have a disability)\b", q):
+        val = qa_vault.get("disability_status")
+        return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
+
+    # Education Degree
+    if re.search(r"\b(degree|highest.*education|level of education)\b", q):
+        edu = qa_vault.get("education", {})
+        val = edu.get("degree") if isinstance(edu, dict) else str(edu)
+        return (str(val), "VAULT_MATCH") if val else (None, "NEEDS_HUMAN")
+
+    # Full Name / Email / Phone / URLs
+    if re.search(r"\b(full name|legal name|your name|candidate name|applicant name)\b", q):
+        val = candidate.get("name")
+        return (str(val), "VAULT_MATCH") if val else (None, "NEEDS_HUMAN")
+    if re.search(r"\b(email address|email)\b", q):
+        val = candidate.get("email")
+        return (str(val), "VAULT_MATCH") if val else (None, "NEEDS_HUMAN")
+    if re.search(r"\b(phone number|mobile|phone)\b", q):
+        val = candidate.get("phone")
+        return (str(val), "VAULT_MATCH") if val else (None, "NEEDS_HUMAN")
+    if re.search(r"\b(linkedin)\b", q):
+        val = candidate.get("linkedin")
+        return (str(val), "VAULT_MATCH") if val else (None, "NEEDS_HUMAN")
+    if re.search(r"\b(github)\b", q):
+        val = candidate.get("github")
+        return (str(val), "VAULT_MATCH") if val else (None, "NEEDS_HUMAN")
+    if re.search(r"\b(portfolio|personal website)\b", q):
+        val = candidate.get("portfolio") or candidate.get("website")
+        return (str(val), "VAULT_MATCH") if val else (None, "NEEDS_HUMAN")
+
+    # Any unknown or unpopulated question returns NEEDS_HUMAN
+    return (None, "NEEDS_HUMAN")
 
 
 def prepare_application_package(

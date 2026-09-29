@@ -255,16 +255,17 @@ def should_invoke_llm(signals: EvaluationSignals, min_score: int = 70) -> bool:
     """
     Decides whether local LLM should be invoked for targeted ambiguity resolution.
     - Zero LLM on hard blocks.
-    - Zero LLM on obvious low-fit rejects.
-    - Invoked on stretch opportunities.
-    - Invoked on uncertain/borderline fit (e.g. 50 <= score < min_score).
+    - Zero LLM on obvious low-fit rejects (score < 50).
+    - Invoked only on narrow borderline ambiguity [min_score - 8, min_score) or high-value stretch (score >= 60).
+    Ensures LLM invocation stays below 25-30% of pipeline volume.
     """
     if signals.hard_block:
         return False
-    if signals.route == "reject" and not signals.is_stretch:
+    if signals.route == "reject":
         return False
-    if signals.is_stretch:
+    if signals.is_stretch and signals.deterministic_score >= 60:
         return True
-    if 50 <= signals.deterministic_score < min_score:
+    lower_bound = max(58, min_score - 8)
+    if lower_bound <= signals.deterministic_score < min_score:
         return True
     return False

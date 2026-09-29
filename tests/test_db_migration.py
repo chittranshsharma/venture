@@ -72,7 +72,7 @@ def test_fresh_database_migration_v4(isolated_db):
         _run_schema_migrations_locked(conn)
 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 4, "user_version must be 4 after full migration"
+        assert version == 6, "user_version must be 6 after full migration"
 
         # Check applications columns
         app_cols = [r[1] for r in conn.execute("PRAGMA table_info(applications)").fetchall()]
@@ -84,6 +84,10 @@ def test_fresh_database_migration_v4(isolated_db):
         assert "approval_label" in app_cols
         assert "prompt_version" in app_cols
         assert "eval_model" in app_cols
+        assert "features_json" in app_cols
+        assert "decision_reason" in app_cols
+        assert "checkpoint" in app_cols
+        assert "package_path" in app_cols
 
         # Check tables exist
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]

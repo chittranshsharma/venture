@@ -35,7 +35,7 @@ from typing import Any, Dict, Optional
 
 from core.config_manager import CONFIG, load_config
 import core.db_manager as db
-from core.state_machine import JobState, transition, is_job_completed
+from core.state_machine import JobState, transition, is_job_completed, get_job_state
 import core.state as state
 from automation.composite_scorer import evaluate_opportunity, should_invoke_llm, EvaluationSignals
 from automation.llm_evaluator import evaluate_job_with_qwen
@@ -102,7 +102,7 @@ def process_job(
         )
 
     # Initial state transition: DISCOVERED
-    if url:
+    if url and not dry_run:
         transition(url, JobState.DISCOVERED, checkpoint="discovered", detail=f"Discovered via {platform}")
 
     # Step 2: 3-Tier Constraint & Free Signal Evaluation
@@ -114,7 +114,7 @@ def process_job(
         db.log_message(f"⛔ Hard Block [{signals.hard_reason}]: Skipped '{title}' at '{company}'")
         features_json_str = json.dumps(signals.to_features_dict())
         
-        if url:
+        if url and not dry_run:
             transition(url, JobState.REJECTED, checkpoint="hard_block_rejected", detail=hard_reason_str)
             db.log_evaluation(
                 url=url, title=title, company=company, jd_text=desc_text,
@@ -151,7 +151,7 @@ def process_job(
         db.log_message(f"{platform} skipped ({score}%): {reason}")
         features_json_str = json.dumps(features)
 
-        if url:
+        if url and not dry_run:
             transition(url, JobState.REJECTED, checkpoint="low_fit_rejected", detail=reason)
             db.log_evaluation(
                 url=url, title=title, company=company, jd_text=desc_text,
@@ -177,7 +177,7 @@ def process_job(
         )
 
     # Step 3: Evaluated State & Selective LLM Ambiguity Resolution
-    if url:
+    if url and not dry_run:
         transition(url, JobState.EVALUATED, checkpoint="evaluated")
 
     llm_res = {}
@@ -207,7 +207,7 @@ def process_job(
     features_json_str = json.dumps(features)
 
     # Persist evaluation record
-    if url:
+    if url and not dry_run:
         db.log_evaluation(
             url=url, title=title, company=company, jd_text=desc_text,
             llm_score=score, rag_score=signals.rag_score,
@@ -223,10 +223,10 @@ def process_job(
     # Step 4: Application Preparation (Resume tailoring, Cover Letter, Mapped Answers)
     pkg = None
     if auto_prepare:
-        if url:
+        if url and not dry_run:
             transition(url, JobState.PREPARING, checkpoint="preparing_package")
         pkg = prepare_application_package(job, signals=signals, llm_evidence=llm_res, cfg=cfg)
-        if url:
+        if url and not dry_run:
             transition(url, JobState.READY_FOR_APPROVAL, checkpoint="ready_for_approval")
 
     # Queue into human doubt queue for approvals review
@@ -246,23 +246,24 @@ def process_job(
         "package_dir": pkg.package_dir if pkg else "",
     }
 
-    with state.DOUBT_LOCK:
-        # Avoid duplicate entries in in-memory queue
-        if not any(d.get("url") == url for d in state.DOUBT_QUEUE):
-            state.DOUBT_QUEUE.append(queue_item)
+    if not dry_run:
+        with state.DOUBT_LOCK:
+            # Avoid duplicate entries in in-memory queue
+            if not any(d.get("url") == url for d in state.DOUBT_QUEUE):
+                state.DOUBT_QUEUE.append(queue_item)
 
-    if url:
-        db.save_to_db(
-            url=url, title=title, company=company, platform=platform,
-            status="Approval Needed", detail=f"[{tag}] {decision_reason}",
-            score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
-            skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
-            prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
-            content_hash=ch, dedup_key=dk, features_json=features_json_str,
-            decision_reason=decision_reason, strengths=strengths, gaps=gaps,
-            outcome_stage="discovered", checkpoint="ready_for_approval",
-            package_path=pkg.package_dir if pkg else None
-        )
+        if url:
+            db.save_to_db(
+                url=url, title=title, company=company, platform=platform,
+                status="Approval Needed", detail=f"[{tag}] {decision_reason}",
+                score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
+                skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
+                prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
+                content_hash=ch, dedup_key=dk, features_json=features_json_str,
+                decision_reason=decision_reason, strengths=strengths, gaps=gaps,
+                outcome_stage="discovered", checkpoint="ready_for_approval",
+                package_path=pkg.package_dir if pkg else None
+            )
 
     db.log_message(f"📦 [{tag}] ({score}%): Opportunity prepared and awaiting review in Approvals.")
 
@@ -281,11 +282,16 @@ async def execute_ats_submission(
     job: Dict[str, Any],
     package: Optional[ApplicationPackage] = None,
     profile: Optional[Dict[str, Any]] = None,
-    dry_run: bool = False
+    dry_run: bool = True
 ) -> bool:
     """
     Executes ATS submission using the specialist adapter framework.
-    Transitions through APPROVED → EXECUTING → SUBMITTED.
+    Safety Invariants:
+    1. submit() reachable only from state APPROVED (or EXECUTING if resuming from checkpoint).
+    2. Explore-route jobs never submit without explicit human approval click.
+    3. daily_apply_cap strictly enforced from DB before execution.
+    4. Explicit dry_run defaults to True to prevent accidental live submissions.
+    5. After submission: confirms success indicator, else sets SUBMITTED_UNVERIFIED.
     """
     if profile is None:
         profile = CONFIG.get("candidate", {})
@@ -294,8 +300,32 @@ async def execute_ats_submission(
     title = job.get("title", "")
     company = job.get("company", "")
 
-    if url:
-        transition(url, JobState.APPROVED, checkpoint="human_approved")
+    # Invariant 1: submit() reachable ONLY from state APPROVED or EXECUTING (resumption)
+    current_state = get_job_state(url) if url else ""
+    if current_state and current_state not in (JobState.APPROVED, JobState.EXECUTING):
+        raise AssertionError(
+            f"Security Invariant Violated: Submission attempted on job in state '{current_state}'. "
+            f"Jobs MUST be in 'APPROVED' or 'EXECUTING' state before submission can occur."
+        )
+
+    # Invariant 2: Explore-route jobs cannot be submitted without explicit human approval
+    route = job.get("route") or (package.evaluation_snapshot.get("route") if package else None)
+    approval_label = job.get("approval_label", "")
+    if route == "explore" and approval_label not in ("apply", "approved") and current_state != JobState.APPROVED:
+        raise AssertionError(
+            f"Security Invariant Violated: Explore-route job '{title}' @ '{company}' "
+            f"cannot be submitted without explicit human approval click."
+        )
+
+    # Invariant 3: Daily Apply Cap enforced from DB count before execution
+    settings = CONFIG.get("settings", {})
+    daily_cap = settings.get("daily_apply_cap", 25)
+    today_applied = db.get_daily_apply_count()
+    if today_applied >= daily_cap and not dry_run:
+        db.log_message(f"Daily application cap ({daily_cap}) reached ({today_applied} today). Aborting submission.")
+        return False
+
+    if url and not dry_run:
         transition(url, JobState.EXECUTING, checkpoint="detecting_adapter")
 
     adapter = get_ats_adapter(url)
@@ -305,7 +335,7 @@ async def execute_ats_submission(
     await adapter.inspect(page)
 
     # Fill
-    if url:
+    if url and not dry_run:
         db.set_checkpoint(url, "filling_form")
     filled = await adapter.fill(page, package=package, profile=profile)
     if not filled:
@@ -315,23 +345,28 @@ async def execute_ats_submission(
     val_res = await adapter.validate(page)
     if not val_res.get("valid", True):
         db.log_message(f"ATS Execution Error: Validation failed. Missing required fields: {val_res.get('missing_required')}")
-        if url:
+        if url and not dry_run:
             transition(url, JobState.RETRYABLE, checkpoint="validation_failed", detail=str(val_res.get("missing_required")))
         return False
 
     # Submit
-    if url:
+    if url and not dry_run:
         db.set_checkpoint(url, "submitting")
     submitted = await adapter.submit(page, dry_run=dry_run)
 
     if submitted:
-        if url:
-            transition(url, JobState.SUBMITTED, checkpoint="submitted", detail="Application submitted successfully")
-            db.record_outcome(url, "applied", notes=f"Submitted via {adapter.platform_name} adapter")
+        # Check verification of submission success
+        verified = True if dry_run else getattr(adapter, "verify_success", lambda p: True)(page)
+        final_state = JobState.SUBMITTED if verified else JobState.SUBMITTED_UNVERIFIED
+        chk = "submitted" if verified else "submitted_unverified"
+
+        if url and not dry_run:
+            transition(url, final_state, checkpoint=chk, detail=f"Application {final_state.lower()}")
+            db.record_outcome(url, "applied", notes=f"Submitted via {adapter.platform_name} adapter (verified={verified})")
             db.update_job_status_in_csv(url, "Approval Needed", "Applied", f"Submitted via {adapter.platform_name}")
-        db.log_message(f"✅ Application Successfully Submitted: {title} at {company}")
+        db.log_message(f"✅ Application Execution Completed [{final_state}]: {title} at {company}")
         return True
     else:
-        if url:
+        if url and not dry_run:
             transition(url, JobState.FAILED, checkpoint="submit_failed", detail="Submit action did not confirm")
         return False

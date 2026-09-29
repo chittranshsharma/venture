@@ -938,16 +938,38 @@ def get_outcome_calibration_summary() -> dict:
                 interview_cnt = stage_stats.get("interview", {}).get("count", 0) + stage_stats.get("offer", {}).get("count", 0)
                 overall_interview_rate = round((interview_cnt / total_applied) * 100, 1) if total_applied > 0 else 0.0
 
+                has_sufficient_data = total_applied >= 30 and interview_cnt >= 5
                 return {
                     "stage_breakdown": stage_stats,
                     "resume_version_performance": ver_stats,
                     "total_applied": total_applied,
                     "interview_count": interview_cnt,
                     "interview_rate": overall_interview_rate,
+                    "sufficient_data": has_sufficient_data,
+                    "data_status": "SUFFICIENT_DATA" if has_sufficient_data else "INSUFFICIENT_DATA",
                 }
         except Exception as e:
             log_message(f"Error generating outcome calibration summary: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "sufficient_data": False, "data_status": "INSUFFICIENT_DATA"}
+
+
+def get_daily_apply_count() -> int:
+    """Returns the count of jobs submitted/applied today from the applications table."""
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT COUNT(*) FROM applications
+                    WHERE status IN ('Applied', 'SUBMITTED', 'Manual Approval Apply')
+                      AND date(applied_at) = date('now', 'localtime')
+                """)
+                row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            log_message(f"Error counting daily applied jobs: {e}")
+            return 0
+
 
 def update_job_status_in_csv(url_key, old_status, new_status, new_detail=""):
     """

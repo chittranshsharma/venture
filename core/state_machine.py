@@ -6,7 +6,7 @@ DISCOVERED → EVALUATED → PREPARING → READY_FOR_APPROVAL → APPROVED → E
 Error states: FAILED, RETRYABLE (reachable from active processing states).
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import core.db_manager as db
 
 
@@ -18,6 +18,7 @@ class JobState:
     APPROVED           = "APPROVED"
     EXECUTING          = "EXECUTING"
     SUBMITTED          = "SUBMITTED"
+    SUBMITTED_UNVERIFIED = "SUBMITTED_UNVERIFIED"
     FAILED             = "FAILED"
     RETRYABLE          = "RETRYABLE"
     REJECTED           = "REJECTED"
@@ -34,26 +35,32 @@ class JobState:
     REJECTED_POST      = "REJECTED"
 
 
+class IllegalStateTransitionError(ValueError):
+    """Raised when an illegal FSM state jump is attempted (e.g. DISCOVERED -> SUBMITTED)."""
+    pass
+
+
 VALID_TRANSITIONS: Dict[str, List[str]] = {
-    "DISCOVERED":         ["EVALUATED", "QUALIFIED", "PREPARING", "REJECTED", "FAILED"],
-    "EVALUATED":          ["PREPARING", "READY_FOR_APPROVAL", "APPROVED", "REJECTED", "FAILED"],
-    "QUALIFIED":          ["PREPARING", "READY_FOR_APPROVAL", "APPROVED", "REJECTED", "FAILED"],
-    "PREPARING":          ["READY_FOR_APPROVAL", "APPROVED", "FAILED", "RETRYABLE"],
-    "READY_FOR_APPROVAL": ["APPROVED", "REJECTED", "FAILED"],
-    "APPROVED":           ["EXECUTING", "FORM_OPENED", "FAILED"],
-    "EXECUTING":          ["SUBMITTED", "FAILED", "RETRYABLE", "RESUME_UPLOADED", "FIELDS_FILLED"],
-    "FORM_OPENED":        ["EXECUTING", "RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
-    "RESUME_UPLOADED":    ["EXECUTING", "FIELDS_FILLED", "FAILED"],
-    "FIELDS_FILLED":      ["SUBMITTED", "RETRYABLE", "FAILED"],
-    "SUBMITTED":          ["INTERVIEW", "OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
-    "INTERVIEW":          ["OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
-    "OFFER":              ["REJECTED", "SUBMITTED"],
-    "GHOSTED":            ["INTERVIEW", "OFFER", "REJECTED"],
-    "FAILED":             ["RETRYABLE", "NEEDS_RETRY", "EXECUTING", "PREPARING", "APPROVED"],
-    "RETRYABLE":          ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
-    "NEEDS_RETRY":        ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
-    "REJECTED":           ["DISCOVERED", "EVALUATED"],  # can re-evaluate on genuine JD revisions
-    "REJECTED_POST":      ["INTERVIEW", "OFFER", "FAILED"],
+    "DISCOVERED":           ["EVALUATED", "QUALIFIED", "PREPARING", "REJECTED", "FAILED"],
+    "EVALUATED":            ["PREPARING", "READY_FOR_APPROVAL", "APPROVED", "REJECTED", "FAILED"],
+    "QUALIFIED":            ["PREPARING", "READY_FOR_APPROVAL", "APPROVED", "REJECTED", "FAILED"],
+    "PREPARING":            ["READY_FOR_APPROVAL", "APPROVED", "FAILED", "RETRYABLE"],
+    "READY_FOR_APPROVAL":   ["APPROVED", "REJECTED", "FAILED"],
+    "APPROVED":             ["EXECUTING", "FORM_OPENED", "FAILED"],
+    "EXECUTING":            ["SUBMITTED", "SUBMITTED_UNVERIFIED", "FAILED", "RETRYABLE", "RESUME_UPLOADED", "FIELDS_FILLED"],
+    "FORM_OPENED":          ["EXECUTING", "RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
+    "RESUME_UPLOADED":      ["EXECUTING", "FIELDS_FILLED", "FAILED"],
+    "FIELDS_FILLED":        ["SUBMITTED", "SUBMITTED_UNVERIFIED", "RETRYABLE", "FAILED"],
+    "SUBMITTED":            ["INTERVIEW", "OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
+    "SUBMITTED_UNVERIFIED": ["SUBMITTED", "INTERVIEW", "OFFER", "GHOSTED", "REJECTED", "FAILED"],
+    "INTERVIEW":            ["OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
+    "OFFER":                ["REJECTED", "SUBMITTED"],
+    "GHOSTED":              ["INTERVIEW", "OFFER", "REJECTED"],
+    "FAILED":               ["RETRYABLE", "NEEDS_RETRY", "EXECUTING", "PREPARING", "APPROVED"],
+    "RETRYABLE":            ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
+    "NEEDS_RETRY":          ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
+    "REJECTED":             ["DISCOVERED", "EVALUATED"],  # can re-evaluate on genuine JD revisions
+    "REJECTED_POST":        ["INTERVIEW", "OFFER", "FAILED"],
 }
 
 _ERROR_STATES = {"FAILED", "RETRYABLE", "NEEDS_RETRY"}
@@ -125,14 +132,40 @@ def can_transition(current: str, new_state: str) -> bool:
     )
 
 
-def transition(url: str, new_state: str, checkpoint: str = "", detail: str = ""):
+LEGACY_STATE_MAPPINGS: Dict[str, Tuple[str, str]] = {
+    "QUALIFIED":       ("EVALUATED", "evaluated"),
+    "FIELDS_FILLED":   ("EXECUTING", "fields_filled"),
+    "RESUME_UPLOADED": ("EXECUTING", "resume_uploaded"),
+    "FORM_OPENED":     ("EXECUTING", "form_opened"),
+    "Applied":         ("SUBMITTED", "submitted"),
+    "Manual Approval Apply": ("SUBMITTED", "submitted"),
+    "REJECTED_POST":   ("REJECTED", "rejected_post"),
+    "Rejected":        ("REJECTED", "rejected"),
+}
+
+
+def normalize_legacy_state(state: str, checkpoint: str = "") -> Tuple[str, str]:
+    """
+    Normalizes legacy database states into the canonical FSM state and checkpoint.
+    Example: 'QUALIFIED' -> ('EVALUATED', 'evaluated')
+    """
+    if state in LEGACY_STATE_MAPPINGS:
+        canonical_state, default_chk = LEGACY_STATE_MAPPINGS[state]
+        return canonical_state, checkpoint or default_chk
+    return state, checkpoint
+
+
+def transition(url: str, new_state: str, checkpoint: str = "", detail: str = "", strict: bool = True):
     """
     Atomically transition an application to a new state and checkpoint in SQLite.
+    Raises IllegalStateTransitionError if strict=True and transition is illegal.
     """
     current = db.get_state(url)
     if current and not can_transition(current, new_state):
-        # Graceful fallback: log warning but permit forward progression if valid alias
-        db.log_message(f"FSM Warning: Non-standard transition {current} -> {new_state}")
+        msg = f"Illegal FSM state jump: cannot transition '{current}' -> '{new_state}'"
+        db.log_message(f"FSM Error: {msg}")
+        if strict:
+            raise IllegalStateTransitionError(msg)
     
     db.update_state(url, new_state, detail=detail)
     if checkpoint:

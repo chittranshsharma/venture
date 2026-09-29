@@ -203,12 +203,9 @@ def run_pipeline_dry_run(
         print("\n" + "-" * 80)
         print("📥 INGESTING APPLICATION OUTCOMES & CALIBRATING FUNNEL...")
         print("-" * 80)
-        # Simulate realistic downstream funnel outcomes for prepared applications
         sample_urls = [c.url for c in approval_candidates if c.url]
         if sample_urls:
-            # 1 applied
             db.record_outcome(sample_urls[0], "applied", notes="Applied via specialist adapter dry-run")
-            # 1 interview if available
             if len(sample_urls) > 1:
                 db.record_outcome(sample_urls[1], "interview", notes="Recruiter phone screen scheduled")
             if len(sample_urls) > 2:
@@ -267,6 +264,10 @@ ATS Adapters Verified:      {len(adapter_results):3d}  (Inspected & dry-run vali
     print("             OUTCOME INGESTION & CALIBRATION METRICS")
     print("=" * 80)
     calib = db.get_outcome_calibration_summary()
+    if not calib.get("sufficient_data", False):
+        print("⚠️  [INSUFFICIENT DATA — need >= 30 applications and positive outcomes to draw statistical conclusions;\n"
+              "    figures below are preliminary historical snapshots]")
+    
     stage_breakdown = calib.get("stage_breakdown", {})
     print("Historical Funnel Stages in Database:")
     for stage, sdata in stage_breakdown.items():
@@ -289,9 +290,9 @@ ATS Adapters Verified:      {len(adapter_results):3d}  (Inspected & dry-run vali
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="VENTURE End-to-End Pipeline Dry-Run")
     parser.add_argument("--input", default="eval/labels.jsonl", help="Path to input jobs JSONL")
-    parser.add_argument("--limit", type=int, default=25, help="Number of jobs to process")
+    parser.add_argument("--limit", type=int, default=10, help="Number of jobs to process")
     parser.add_argument("--include-ats-samples", action="store_true", default=True, help="Include sample Greenhouse/Lever/Ashby ATS jobs")
-    parser.add_argument("--no-outcomes", action="store_true", help="Do not record sample outcomes")
+    parser.add_argument("--persist-sample-outcomes", action="store_true", default=False, help="Persist simulated outcomes to database (default False)")
     args = parser.parse_args()
 
     jobs = load_dataset(args.input, limit=args.limit)
@@ -301,5 +302,5 @@ if __name__ == "__main__":
     run_pipeline_dry_run(
         jobs=jobs,
         simulate_ats=True,
-        record_sample_outcomes=not args.no_outcomes
+        record_sample_outcomes=args.persist_sample_outcomes
     )
