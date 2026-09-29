@@ -1,7 +1,7 @@
 # VENTURE Scorer Holdout Protocol & Design Freeze
 
 **Frozen Tag**: `scorer-frozen-v1`  
-**Base Commit**: Will be committed and tagged immediately upon freeze.
+**Base Commit**: `712be42a85f66d064bf321f5d557dbb201eb9c49`
 
 ---
 
