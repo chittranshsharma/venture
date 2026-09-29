@@ -96,6 +96,12 @@ class RadarAgent:
                                     self._callback(job)
                                 except Exception as cb_err:
                                     log_message(f"Radar callback error: {cb_err}")
+                            else:
+                                try:
+                                    from automation.orchestrator import process_job
+                                    process_job(job)
+                                except Exception as p_err:
+                                    log_message(f"Radar pipeline processing error: {p_err}")
                 except Exception as e:
                     log_message(f"Radar polling error for '{query}': {e}")
 
@@ -123,6 +129,12 @@ class RadarAgent:
                                     self._callback(job)
                                 except Exception as cb_err:
                                     log_message(f"Career page callback error: {cb_err}")
+                            else:
+                                try:
+                                    from automation.orchestrator import process_job
+                                    process_job(job)
+                                except Exception as p_err:
+                                    log_message(f"Career page processing error: {p_err}")
                 except Exception as e:
                     log_message(f"Career page crawl error: {e}")
 

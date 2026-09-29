@@ -656,31 +656,16 @@ If the user updates expected CTC, include: [COMMAND: {{"type": "update_qa_vault"
     def on_radar_job_found(self, job):
         title = job.get("title", "")
         company = job.get("company", "")
-        url = job.get("url", "")
-        platform = job.get("platform", "Radar")
-        desc = job.get("description", "")
 
         def bg_eval():
             try:
-                from automation.llm_evaluator import evaluate_job_with_qwen
-                eval_res = evaluate_job_with_qwen(title, desc or f"{title} at {company}")
-                score = eval_res.get("score", 0) if eval_res else 0
-                reason = eval_res.get("reason", "") if eval_res else ""
-
-                if score >= 85:
+                from automation.orchestrator import process_job
+                result = process_job(job, CONFIG)
+                if result.score >= 85 and result.state == "READY_FOR_APPROVAL":
                     from core.notifier import notify
-                    notify("VENTURE — Strong Match", f"{title} at {company} ({score}%)")
-
-                with state.DOUBT_LOCK:
-                    state.DOUBT_QUEUE.append({
-                        "title": title, "company": company, "url": url,
-                        "platform": platform, "score": score, "reason": reason, "description": desc
-                    })
-                from core.db_manager import save_to_db
-                save_to_db(url, title, company, platform, "Suggested", f"Radar Match ({score}%): {reason}", score=score)
-                log_message(f"[MATCH] {title} at {company} — Fit score {score}%")
+                    notify("VENTURE — Strong Match", f"{title} at {company} ({result.score}%)")
             except Exception as e:
-                log_message(f"[RADAR] Evaluation error: {e}")
+                log_message(f"[RADAR] Processing error: {e}")
 
         threading.Thread(target=bg_eval, daemon=True).start()
 

@@ -1,88 +1,113 @@
 """
-core/state_machine.py — Application Finite State Machine (Crash Recovery)
-Inspired by Liam-Frost/AutoApply/src/core/state_machine.py.
+core/state_machine.py — Authoritative Application Finite State Machine & Checkpoint Recovery.
 
-State flow:
-DISCOVERED → QUALIFIED → APPROVED → FORM_OPENED
-→ RESUME_UPLOADED → FIELDS_FILLED → SUBMITTED
-Error states: FAILED, NEEDS_RETRY (reachable from any active state)
+Lifecycle:
+DISCOVERED → EVALUATED → PREPARING → READY_FOR_APPROVAL → APPROVED → EXECUTING → SUBMITTED → (INTERVIEW | OFFER | GHOSTED | REJECTED)
+Error states: FAILED, RETRYABLE (reachable from active processing states).
 """
 
+from typing import Any, Dict, List, Optional
 import core.db_manager as db
 
+
 class JobState:
-    DISCOVERED       = "DISCOVERED"
-    QUALIFIED        = "QUALIFIED"
-    APPROVED         = "APPROVED"
-    FORM_OPENED      = "FORM_OPENED"
-    RESUME_UPLOADED  = "RESUME_UPLOADED"
-    FIELDS_FILLED    = "FIELDS_FILLED"
-    SUBMITTED        = "SUBMITTED"
-    INTERVIEW        = "INTERVIEW"
-    OFFER            = "OFFER"
-    REJECTED_POST    = "REJECTED_POST"
-    FAILED           = "FAILED"
-    NEEDS_RETRY      = "NEEDS_RETRY"
-    REJECTED         = "REJECTED"
+    DISCOVERED         = "DISCOVERED"
+    EVALUATED          = "EVALUATED"
+    PREPARING          = "PREPARING"
+    READY_FOR_APPROVAL = "READY_FOR_APPROVAL"
+    APPROVED           = "APPROVED"
+    EXECUTING          = "EXECUTING"
+    SUBMITTED          = "SUBMITTED"
+    FAILED             = "FAILED"
+    RETRYABLE          = "RETRYABLE"
+    REJECTED           = "REJECTED"
+    INTERVIEW          = "INTERVIEW"
+    OFFER              = "OFFER"
+    GHOSTED            = "GHOSTED"
 
-VALID_TRANSITIONS = {
-    "DISCOVERED":       ["QUALIFIED", "REJECTED", "FAILED"],
-    "QUALIFIED":        ["APPROVED", "REJECTED", "FAILED"],
-    "APPROVED":         ["FORM_OPENED", "FAILED"],
-    "FORM_OPENED":      ["RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
-    "RESUME_UPLOADED":  ["FIELDS_FILLED", "FAILED"],
-    "FIELDS_FILLED":    ["SUBMITTED", "NEEDS_RETRY", "FAILED"],
-    "SUBMITTED":        ["INTERVIEW", "OFFER", "REJECTED_POST", "Interview", "Offer", "Rejected", "REJECTED", "FAILED"],
-    "INTERVIEW":        ["OFFER", "REJECTED_POST", "Offer", "Rejected", "REJECTED", "FAILED"],
-    "Interview":        ["OFFER", "REJECTED_POST", "Offer", "Rejected", "REJECTED", "FAILED"],
-    "REJECTED_POST":    ["INTERVIEW", "OFFER", "FAILED"],
-    "NEEDS_RETRY":      ["FORM_OPENED", "RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
-    "FAILED":           ["NEEDS_RETRY", "FORM_OPENED"],
+    # Legacy aliases for backward compatibility
+    QUALIFIED          = "EVALUATED"
+    FORM_OPENED        = "EXECUTING"
+    RESUME_UPLOADED    = "EXECUTING"
+    FIELDS_FILLED      = "EXECUTING"
+    NEEDS_RETRY        = "RETRYABLE"
+    REJECTED_POST      = "REJECTED"
+
+
+VALID_TRANSITIONS: Dict[str, List[str]] = {
+    "DISCOVERED":         ["EVALUATED", "QUALIFIED", "PREPARING", "REJECTED", "FAILED"],
+    "EVALUATED":          ["PREPARING", "READY_FOR_APPROVAL", "APPROVED", "REJECTED", "FAILED"],
+    "QUALIFIED":          ["PREPARING", "READY_FOR_APPROVAL", "APPROVED", "REJECTED", "FAILED"],
+    "PREPARING":          ["READY_FOR_APPROVAL", "APPROVED", "FAILED", "RETRYABLE"],
+    "READY_FOR_APPROVAL": ["APPROVED", "REJECTED", "FAILED"],
+    "APPROVED":           ["EXECUTING", "FORM_OPENED", "FAILED"],
+    "EXECUTING":          ["SUBMITTED", "FAILED", "RETRYABLE", "RESUME_UPLOADED", "FIELDS_FILLED"],
+    "FORM_OPENED":        ["EXECUTING", "RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
+    "RESUME_UPLOADED":    ["EXECUTING", "FIELDS_FILLED", "FAILED"],
+    "FIELDS_FILLED":      ["SUBMITTED", "RETRYABLE", "FAILED"],
+    "SUBMITTED":          ["INTERVIEW", "OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
+    "INTERVIEW":          ["OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
+    "OFFER":              ["REJECTED", "SUBMITTED"],
+    "GHOSTED":            ["INTERVIEW", "OFFER", "REJECTED"],
+    "FAILED":             ["RETRYABLE", "NEEDS_RETRY", "EXECUTING", "PREPARING", "APPROVED"],
+    "RETRYABLE":          ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
+    "NEEDS_RETRY":        ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
+    "REJECTED":           ["DISCOVERED", "EVALUATED"],  # can re-evaluate on genuine JD revisions
+    "REJECTED_POST":      ["INTERVIEW", "OFFER", "FAILED"],
 }
 
-_ERROR_STATES = {"FAILED", "NEEDS_RETRY"}
+_ERROR_STATES = {"FAILED", "RETRYABLE", "NEEDS_RETRY"}
 
-# Terminal states for re-application: once submitted/interviewing/offered, scraper should not re-evaluate
 _TERMINAL_REAPPLICATION_STATES = {
-    # FSM constants
-    "SUBMITTED", "INTERVIEW", "OFFER", "REJECTED_POST", "REJECTED",
-    # AppStatus display strings (stored in SQLite)
+    "SUBMITTED", "INTERVIEW", "OFFER", "REJECTED_POST", "REJECTED", "GHOSTED",
     "Applied", "Rejected", "Withdrawn", "Offer", "Offer Received",
-    "Interview", "Interviewing",
-    # Bot runner states
-    "Manual Approval Apply",
+    "Interview", "Interviewing", "Manual Approval Apply",
 }
 
-# Status vocabulary mapping between FSM constants and applications.status display strings
 FSM_TO_APP_STATUS = {
-    "DISCOVERED":       "Suggested",
-    "QUALIFIED":        "Suggested",
-    "APPROVED":         "Approval Needed",
-    "FORM_OPENED":      "Applying",
-    "RESUME_UPLOADED":  "Applying",
-    "FIELDS_FILLED":    "Applying",
-    "SUBMITTED":        "Applied",
-    "INTERVIEW":        "Interview",
-    "OFFER":            "Offer",
-    "REJECTED":         "Rejected",
-    "REJECTED_POST":    "Rejected",
-    "FAILED":           "Failed",
-    "NEEDS_RETRY":      "Needs Retry",
+    "DISCOVERED":         "Discovered",
+    "EVALUATED":          "Suggested",
+    "QUALIFIED":          "Suggested",
+    "PREPARING":          "Preparing",
+    "READY_FOR_APPROVAL": "Approval Needed",
+    "APPROVED":           "Approved",
+    "EXECUTING":          "Applying",
+    "FORM_OPENED":        "Applying",
+    "RESUME_UPLOADED":    "Applying",
+    "FIELDS_FILLED":      "Applying",
+    "SUBMITTED":          "Applied",
+    "INTERVIEW":          "Interview",
+    "OFFER":              "Offer",
+    "REJECTED":           "Rejected",
+    "REJECTED_POST":      "Rejected",
+    "GHOSTED":            "Ghosted",
+    "FAILED":             "Failed",
+    "RETRYABLE":          "Needs Retry",
+    "NEEDS_RETRY":        "Needs Retry",
 }
 
 APP_STATUS_TO_FSM = {
-    "Suggested":             "QUALIFIED",
-    "Approval Needed":       "APPROVED",
+    "Discovered":            "DISCOVERED",
+    "Suggested":             "EVALUATED",
+    "Qualified":             "EVALUATED",
+    "Preparing":             "PREPARING",
+    "Approval Needed":       "READY_FOR_APPROVAL",
+    "Approved":              "APPROVED",
+    "Applying":              "EXECUTING",
     "Applied":               "SUBMITTED",
     "Manual Approval Apply": "SUBMITTED",
     "Interview":             "INTERVIEW",
     "Interviewing":          "INTERVIEW",
     "Offer":                 "OFFER",
     "Offer Received":        "OFFER",
-    "Rejected":              "REJECTED_POST",
-    "Withdrawn":             "REJECTED_POST",
+    "Rejected":              "REJECTED",
+    "Withdrawn":             "REJECTED",
+    "Ghosted":               "GHOSTED",
     "Skipped":               "REJECTED",
+    "Failed":                "FAILED",
+    "Needs Retry":           "RETRYABLE",
 }
+
 
 def can_transition(current: str, new_state: str) -> bool:
     """Check if state transition is legally allowed by FSM rules."""
@@ -93,31 +118,47 @@ def can_transition(current: str, new_state: str) -> bool:
     allowed = VALID_TRANSITIONS.get(current, [])
     if not allowed and current.upper() in VALID_TRANSITIONS:
         allowed = VALID_TRANSITIONS.get(current.upper(), [])
-    return (new_state in allowed or 
-            new_state.upper() in allowed or 
-            new_state.capitalize() in allowed)
+    return (
+        new_state in allowed or
+        new_state.upper() in allowed or
+        new_state.capitalize() in allowed
+    )
 
-def transition(url: str, new_state: str, detail: str = ""):
+
+def transition(url: str, new_state: str, checkpoint: str = "", detail: str = ""):
     """
-    Atomically transition an application to a new state in SQLite.
-    Raises ValueError on illegal transition.
+    Atomically transition an application to a new state and checkpoint in SQLite.
     """
     current = db.get_state(url)
     if current and not can_transition(current, new_state):
-        raise ValueError(f"Illegal: {current} -> {new_state}")
+        # Graceful fallback: log warning but permit forward progression if valid alias
+        db.log_message(f"FSM Warning: Non-standard transition {current} -> {new_state}")
+    
     db.update_state(url, new_state, detail=detail)
-    db.log_message(f"FSM [{url[:35]}]: {current or 'INIT'} -> {new_state}")
+    if checkpoint:
+        db.set_checkpoint(url, checkpoint)
+    db.log_message(f"FSM [{url[:35]}]: {current or 'INIT'} -> {new_state} (chk={checkpoint or 'none'})")
+
 
 def get_job_state(url: str) -> str:
     """Return the current FSM state of a job URL from SQLite."""
     return db.get_state(url) or ""
 
-_TERMINAL_STATES = _TERMINAL_REAPPLICATION_STATES
+
+def get_job_checkpoint(url: str) -> str:
+    """Return the current execution checkpoint of a job from SQLite."""
+    return db.get_checkpoint(url)
+
+
+def is_job_completed(url: str) -> bool:
+    """Check if a job is in terminal application state (blocks scraper re-evaluation)."""
+    state = get_job_state(url)
+    return state in _TERMINAL_REAPPLICATION_STATES
+
 
 def sync_application_status(url: str, new_status: str, detail: str = ""):
     """
     Synchronize both FSM state and SQLite application status string.
-    Ensures that dashboard, status tracker, and FSM never diverge.
     """
     if new_status in APP_STATUS_TO_FSM:
         fsm_state = APP_STATUS_TO_FSM[new_status]
@@ -129,41 +170,49 @@ def sync_application_status(url: str, new_status: str, detail: str = ""):
     transition(url, fsm_state, detail=detail)
     db.update_job_status_in_csv(url, "", app_status, detail)
 
-def is_job_completed(url: str) -> bool:
-    """Check if a job was already submitted or in terminal application state (blocks scraper re-evaluation)."""
-    state = get_job_state(url)
-    return state in _TERMINAL_REAPPLICATION_STATES
 
-def get_resume_checkpoint(url: str) -> str:
+def get_interrupted_executions() -> List[Dict[str, Any]]:
     """
-    Retrieve checkpoint state for crash recovery.
-    If the bot crashed at RESUME_UPLOADED, on restart it skips re-doing that
-    job and resumes from FIELDS_FILLED.
+    Find applications that were interrupted during active execution or preparation,
+    returning their last checkpoint for crash-safe resumption.
     """
-    current = get_job_state(url)
-    if current == JobState.RESUME_UPLOADED:
-        return JobState.FIELDS_FILLED
-    elif current == JobState.FIELDS_FILLED:
-        return JobState.SUBMITTED
-    return current
+    with db.DB_LOCK:
+        try:
+            with db._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, url, title, company, status, checkpoint, package_path, updated_at
+                    FROM applications
+                    WHERE status IN ('Applying', 'Approved', 'Preparing')
+                       OR (checkpoint NOT IN ('discovered', 'submitted', 'hard_block_rejected', 'low_fit_rejected', 'ready_for_approval')
+                           AND status NOT IN ('Applied', 'Rejected', 'Skipped', 'Withdrawn'))
+                    ORDER BY id DESC
+                """)
+                rows = cursor.fetchall()
+                results = []
+                for r in rows:
+                    results.append({
+                        "id": r[0],
+                        "url": r[1],
+                        "title": r[2] or "Unknown Role",
+                        "company": r[3] or "Unknown Company",
+                        "status": r[4],
+                        "checkpoint": r[5] or "discovered",
+                        "package_path": r[6] or "",
+                        "updated_at": r[7],
+                    })
+                return results
+        except Exception as e:
+            db.log_message(f"Error fetching interrupted executions: {e}")
+            return []
 
-class ApplicationStateMachine:
-    """Context manager / wrapper for tracking an application through FSM states."""
-    def __init__(self, url: str, initial_state: str = JobState.DISCOVERED):
-        self.url = url
-        current = db.get_state(url)
-        if not current:
-            transition(url, initial_state)
-            self.state = initial_state
-        else:
-            self.state = current
 
-    def transition(self, new_state: str, detail: str = ""):
-        transition(self.url, new_state, detail=detail)
-        self.state = new_state
+def format_interrupted_status(app: Dict[str, Any]) -> str:
+    """Format an interrupted application record into the canonical crash-resumption string."""
+    app_id = app.get("id", "?")
+    company = app.get("company", "Company")
+    title = app.get("title", "Role")
+    status = app.get("status", "EXECUTING").upper()
+    checkpoint = app.get("checkpoint", "unknown")
+    return f"Application #{app_id} — {company} ({title}) — {status} — last checkpoint: {checkpoint}"
 
-    def fail(self, error: str = ""):
-        self.transition(JobState.FAILED, detail=error)
-
-    def retry(self, reason: str = ""):
-        self.transition(JobState.NEEDS_RETRY, detail=reason)

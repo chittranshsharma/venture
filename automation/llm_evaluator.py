@@ -145,30 +145,31 @@ def query_local_ollama(prompt, model=None, options=None):
         "prompt": prompt,
         "stream": False,
         "temperature": 0.1,    # deterministic, consistent JSON output
-        "num_predict": 1024,   # cap response length, avoids hanging on large models
+        "num_predict": 250,    # fast, focused JSON evaluation output
     }
     if options and isinstance(options, dict):
         data.update(options)
 
     req_data = json.dumps(data).encode('utf-8')
 
-    for attempt in range(MAX_RETRIES + 1):
+    max_local_retries = 1
+    for attempt in range(max_local_retries + 1):
         req = urllib.request.Request(
             url,
             data=req_data,
             headers={'Content-Type': 'application/json'}
         )
         try:
-            with urllib.request.urlopen(req, timeout=120) as response:
+            with urllib.request.urlopen(req, timeout=25) as response:
                 res = json.loads(response.read().decode('utf-8'))
                 return res.get("response", "").strip()
         except Exception as e:
-            if attempt < MAX_RETRIES:
+            if attempt < max_local_retries:
                 import time
-                time.sleep(2 * (attempt + 1))
+                time.sleep(1)
                 continue
-            log_message(f"Local Ollama API error after {MAX_RETRIES + 1} attempts: {e}")
-            return f"Ollama model '{target_model}' is unavailable or took too long to respond."
+            log_message(f"Local Ollama API note: {e}")
+            return f"Ollama model '{target_model}' took too long to respond."
 
 
 # Backwards-compat alias (old name kept so existing references still resolve)

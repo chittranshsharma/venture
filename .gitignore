@@ -18,6 +18,7 @@ venture_phase_plan.md
 # Media, Screenshots & Generated Files
 screenshots/
 tailored_resumes/
+application_packages/
 eval/runs/
 eval/labels.jsonl
 *.log

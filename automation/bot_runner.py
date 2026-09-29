@@ -8,12 +8,13 @@ from playwright.async_api import async_playwright
 import core.state as state
 from core.config_manager import CONFIG, get_location_search_term, encode_query_for_url, SCREENSHOTS_DIR
 from core.db_manager import log_message, save_to_db, load_applied_urls, recalculate_metrics, APPLIED_URLS_SET, init_applied_urls, update_job_status_in_csv, save_recruiter_contact, route, compute_content_hash, compute_dedup_key, log_evaluation
-from core.state_machine import JobState, transition, get_job_state, is_job_completed
+from core.state_machine import JobState, transition, get_job_state, is_job_completed, get_interrupted_executions, format_interrupted_status
 from core.contact_extractor import extract_recruiter_contacts
 from core.credential_store import get_credential
 import json
 from automation.llm_evaluator import evaluate_job_with_qwen
 from automation.composite_scorer import evaluate_opportunity, should_invoke_llm
+from automation.orchestrator import process_job, execute_ats_submission
 from automation.form_autofiller import auto_fill_playwright_form
 from automation.job_scraper import fast_scrape_jobs
 import importlib
@@ -221,63 +222,29 @@ async def wait_for_manual_submission(page, has_doubts=False):
 
 async def apply_to_url(page, job_url, job=None, profile=None):
     """
-    Phase 4 Dispatcher (P4.2): Detects ATS platform via URL and DOM signatures,
-    then dynamically routes to the appropriate zero-LLM specialist or generalist handler.
+    Executes ATS submission using the specialist adapter framework.
     """
     if profile is None:
         profile = CONFIG.get("candidate", {})
     if job is None:
         job = {"url": job_url}
-
-    ats = detect_from_url(job_url) or await detect_from_dom(page)
-    log_message(f"ATS Routing: Detected platform '{ats or 'Unknown'}' for {job_url}")
-
-    specialist_map = {
-        "greenhouse": "automation.specialists.greenhouse",
-        "lever":      "automation.specialists.lever",
-        "ashby":      "automation.specialists.ashby",
-    }
-
-    # Check if a specialist (built-in or self-compiled) exists
-    mod_path = None
-    if ats:
-        specialist_file = os.path.join(os.path.dirname(__file__), "specialists", f"{ats}.py")
-        if os.path.exists(specialist_file):
-            mod_path = f"automation.specialists.{ats}"
-        else:
-            mod_path = specialist_map.get(ats)
-
-    if not mod_path:
-        mod_path = "automation.specialists.generalist"
-
-    try:
-        module = importlib.import_module(mod_path)
-        return await module.fill(page, profile)
-    except Exception as e:
-        log_message(f"ATS Specialist error ({mod_path}): {e}")
-        if mod_path != "automation.specialists.generalist":
-            try:
-                gen_module = importlib.import_module("automation.specialists.generalist")
-                return await gen_module.fill(page, profile)
-            except Exception as ge:
-                log_message(f"Generalist fallback error: {ge}")
-        return False
+    return await execute_ats_submission(page, job, profile=profile)
 
 
 async def process_job_evaluation(title, company, href, desc_text, platform, desc_page, browser):
     """
-    Helper function that handles the shared LLM evaluation, scoring, doubt queue,
-    DB save, and screenshot pattern.
-    Returns True if applied/suggested, False if skipped.
+    Authoritative job evaluation handler powered by orchestrator.process_job.
+    Eliminates duplicated scoring logic in scrapers.
+    Returns True if applied/suggested/queued, False if skipped.
     """
     # Safety check: enforce daily application cap
     if await check_safety_limit():
         return False
     
     contacts = await asyncio.to_thread(extract_recruiter_contacts, desc_text)
-    email_matches = contacts["emails"]
-    phone_matches = contacts["phones"]
-    hr_matches = contacts["hr_names"]
+    email_matches = contacts.get("emails", [])
+    phone_matches = contacts.get("phones", [])
+    hr_matches = contacts.get("hr_names", [])
     
     # Save recruiter contact to dedicated DB if any info found
     if email_matches or phone_matches or hr_matches:
@@ -298,188 +265,35 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
         )
         log_message(f"📁 [COLLECT ONLY] Stored raw JD for '{title}' at '{company}'")
         return False
-        
-    ch = compute_content_hash(desc_text)
-    dk = compute_dedup_key(company, title)
 
-    # 1. Deterministic Opportunity Evaluation (Invariants + Free Signals + Calibrated Scoring)
-    signals = await asyncio.to_thread(evaluate_opportunity, title, company, desc_text, CONFIG)
+    job_data = {
+        "title": title,
+        "company": company,
+        "url": href,
+        "description": desc_text,
+        "platform": platform,
+    }
 
-    # Tier-1 Invariants: Instant Hard Block (Zero LLM)
-    if signals.hard_block:
-        hard_reason_str = f"Tier-1 Invariant Hard Block: {signals.hard_reason}"
-        log_message(f"⛔ Hard Block [{signals.hard_reason}]: Skipped '{title}' at '{company}'")
-        features_json_str = json.dumps(signals.to_features_dict())
-        log_evaluation(
-            url=href, title=title, company=company, jd_text=desc_text,
-            llm_score=0, rag_score=0.0,
-            seniority="entry", skill_overlap=0.0,
-            route="constraint", propensity=0.0,
-            eval_model=None, prompt_version=None,
-            dedup_key=dk, content_hash=ch,
-            features_json=features_json_str, decision_reason=hard_reason_str,
-            outcome_stage="rejected"
-        )
-        save_to_db(href, title, company, platform, "Skipped", hard_reason_str,
-                   score=0, rag_score=0.0, seniority="entry",
-                   skill_overlap=0.0, jd_text=desc_text,
-                   content_hash=ch, dedup_key=dk,
-                   features_json=features_json_str, decision_reason=hard_reason_str,
-                   outcome_stage="rejected")
-        try:
-            transition(href, JobState.REJECTED, detail=hard_reason_str)
-        except Exception:
-            pass
+    # Authoritative flow: normalize -> dedup -> constraints -> free signals -> composite score -> selective LLM -> package prep
+    result = await asyncio.to_thread(process_job, job_data, CONFIG)
+
+    if result.state == JobState.REJECTED or result.route in ["reject", "constraint", "completed"]:
         return False
 
-    score = signals.deterministic_score
-    routing = signals.route
-    propensity = signals.propensity
-    features = signals.to_features_dict()
-    min_score = CONFIG.get("settings", {}).get("min_score", 70)
-
-    # 2. Selective Local LLM Ambiguity Resolution (Stretch & Borderline cases only)
-    llm_res = {}
-    llm_invoked = False
-    if should_invoke_llm(signals, min_score=min_score):
-        log_message(f"🧠 Ambiguity Resolver: Invoking local LLM for '{title}' at '{company}' (score={score}%, stretch={signals.is_stretch})...")
-        try:
-            llm_res = await asyncio.to_thread(evaluate_job_with_qwen, title, desc_text)
-            if llm_res is None:
-                llm_res = {}
-            llm_invoked = True
-        except Exception as e:
-            log_message(f"LLM evaluation warning for '{title}': {e}")
-            llm_res = {}
-
-    # VENTURE GUARDRAIL: The LLM does NOT silently modify the deterministic score.
-    features["llm_invoked"] = llm_invoked
-    features["llm_score"] = llm_res.get("score")
-    features["score_adjustment"] = 0
-
-    strengths = llm_res.get("strengths") or [f"Proficient in {s}" for s in signals.matched_skills] or ["Relevant technical background"]
-    gaps = llm_res.get("gaps") or [f"Missing required skill: {s}" for s in signals.missing_skills] or []
-    if signals.total_penalty > 0:
-        for p in signals.penalties:
-            gaps.append(f"{p.get('type')}: {p.get('evidence')}")
-
-    llm_reason_note = llm_res.get("reason", "")
-    decision_reason = signals.generate_decision_reason(llm_reason=llm_reason_note if llm_invoked else None)
-    features["decision_reason"] = decision_reason
-    features_json_str = json.dumps(features)
-
-    # Persist every evaluated job to append-only evaluations table (queue, explore, or reject)
-    log_evaluation(
-        url=href, title=title, company=company, jd_text=desc_text,
-        llm_score=score, rag_score=signals.rag_score,
-        seniority=llm_res.get("seniority", "mid"), skill_overlap=signals.jd_coverage,
-        route=routing, propensity=propensity,
-        eval_model=llm_res.get("eval_model") or "deterministic+qwen",
-        prompt_version=llm_res.get("prompt_version"),
-        dedup_key=dk, content_hash=ch,
-        features_json=features_json_str, decision_reason=decision_reason,
-        outcome_stage="discovered" if routing != "reject" else "rejected"
-    )
-
-    if routing == "reject":
-        log_message(f"{platform} skipped ({score}%): {decision_reason}")
-        save_to_db(href, title, company, platform, "Skipped", decision_reason,
-                   score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
-                   skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
-                   prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
-                   content_hash=ch, dedup_key=dk,
-                   features_json=features_json_str, decision_reason=decision_reason,
-                   outcome_stage="rejected")
-        try:
-            transition(href, JobState.REJECTED, detail=decision_reason)
-        except Exception:
-            pass
-        return False
-
-    if routing == "explore":
-        tag = "STRETCH OPPORTUNITY" if signals.is_stretch else "BORDERLINE FIT"
-        log_message(f"🔍 {tag} ({score}%): Queueing '{title}' at '{company}' in Approvals.")
-        with state.DOUBT_LOCK:
-            state.DOUBT_QUEUE.append({
-                "title": title, "company": company, "url": href, 
-                "platform": platform, "score": score, "reason": f"[{tag}] {decision_reason}",
-                "description": desc_text, "source": "explore",
-                "propensity": propensity,
-                "rag_score": signals.rag_score,
-                "seniority": llm_res.get("seniority", "mid"),
-                "skill_overlap": signals.jd_coverage,
-                "eval_model": llm_res.get("eval_model"),
-                "prompt_version": llm_res.get("prompt_version"),
-                "strengths": strengths,
-                "gaps": gaps,
-                "content_hash": ch,
-                "dedup_key": dk,
-                "features_json": features_json_str,
-                "features": features,
-                "decision_reason": decision_reason,
-                "is_stretch": signals.is_stretch,
-                "penalties": signals.penalties,
-                "stretch_signals": signals.stretch_signals,
-            })
-        save_to_db(href, title, company, platform, "Approval Needed", f"[{tag}] {decision_reason}",
-                   score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
-                   skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
-                   prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
-                   content_hash=ch, dedup_key=dk,
-                   features_json=features_json_str, decision_reason=decision_reason,
-                   strengths=strengths, gaps=gaps,
-                   outcome_stage="discovered")
-        return True
-
-    # High Fit (routing == "queue")
-    try:
-        transition(href, JobState.QUALIFIED)
-    except Exception:
-        pass
+    score = result.score
     if score >= 85:
         from core.notifier import notify
         notify("JobPilot — Strong Match", f"{title} at {company} ({score}%)")
 
-    should_approve = llm_res.get("should_approve", False)
     require_approval = CONFIG.get("settings", {}).get("require_approval", True)
-    if should_approve or require_approval:
-        log_message(f"MATCH QUALIFIED ({score}%): Queueing '{title}' at '{company}' in Approvals.")
-        with state.DOUBT_LOCK:
-            state.DOUBT_QUEUE.append({
-                "title": title, "company": company, "url": href, 
-                "platform": platform, "score": score, "reason": decision_reason, "description": desc_text,
-                "source": "queue",
-                "propensity": propensity,
-                "rag_score": signals.rag_score,
-                "seniority": llm_res.get("seniority", "mid"),
-                "skill_overlap": signals.jd_coverage,
-                "eval_model": llm_res.get("eval_model"),
-                "prompt_version": llm_res.get("prompt_version"),
-                "strengths": strengths,
-                "gaps": gaps,
-                "content_hash": ch,
-                "dedup_key": dk,
-                "features_json": features_json_str,
-                "features": features,
-                "decision_reason": decision_reason,
-                "is_stretch": signals.is_stretch,
-                "penalties": signals.penalties,
-                "stretch_signals": signals.stretch_signals,
-            })
-        save_to_db(href, title, company, platform, "Approval Needed", decision_reason,
-                   score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
-                   skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
-                   prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
-                   content_hash=ch, dedup_key=dk,
-                   features_json=features_json_str, decision_reason=decision_reason,
-                   strengths=strengths, gaps=gaps,
-                   outcome_stage="discovered")
+    if require_approval or result.is_stretch or score < 85:
         return True
-    else:
-        try:
-            transition(href, JobState.APPROVED)
-        except Exception:
-            pass
+
+    # Auto-apply opt-in path (only if require_approval is False and score >= 85 and not stretch)
+    try:
+        transition(href, JobState.APPROVED)
+    except Exception:
+        pass
             
         sc_path = os.path.join(SCREENSHOTS_DIR, f"{platform.lower()}_match_{random.randint(1000, 9999)}.png")
         try:
@@ -667,6 +481,13 @@ def get_edge_executable_path():
 async def run_bot_async():
     log_message("Starting Local Job Bot Loop...")
     init_applied_urls()
+
+    # Crash Resumption Engine: surface any interrupted applications
+    interrupted = get_interrupted_executions()
+    if interrupted:
+        log_message(f"🔄 Resumption Engine: Found {len(interrupted)} interrupted application(s):")
+        for app in interrupted[:5]:
+            log_message(f"   • {format_interrupted_status(app)}")
 
     if CONFIG.get("settings", {}).get("collect_only", False):
         log_message("📁 COLLECT-ONLY MODE ACTIVE: Collecting JDs across queries without LLM evaluation or auto-apply.")
@@ -1152,6 +973,17 @@ def stop_bot():
 def apply_single_job_async(job):
     async def process_apply_page(page, job):
         log_message(f"APPLYING APPROVED JOB: {job['title']} at {job['company']}")
+        url = job.get("url", "")
+
+        # Check for specialist ATS adapters (Greenhouse, Lever, Ashby)
+        from automation.specialists.registry import get_ats_adapter
+        adapter = get_ats_adapter(url)
+        if adapter.platform_name in ["greenhouse", "lever", "ashby"]:
+            log_message(f"ATS Specialist Adapter: Handling application via {adapter.platform_name} adapter...")
+            await goto_with_retry(page, url)
+            await asyncio.sleep(2)
+            return await execute_ats_submission(page, job, profile=CONFIG.get("candidate", {}))
+
         await goto_with_retry(page, job["url"])
         await asyncio.sleep(3)
         

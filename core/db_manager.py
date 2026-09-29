@@ -373,6 +373,26 @@ def _run_schema_migrations_locked(conn):
             conn.execute("PRAGMA user_version = 5")
             conn.commit()
             print("[DB Migration] Schema migrated to version 5 (Telemetry & Outcome Engine).")
+
+        if v < 6:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(applications)").fetchall()]
+            new_cols = [
+                ("package_path",          "TEXT"),
+                ("checkpoint",            "TEXT DEFAULT 'discovered'"),
+                ("resume_version",        "TEXT"),
+                ("cover_letter_version",  "TEXT"),
+                ("answers_version",       "TEXT"),
+            ]
+            for col, typ in new_cols:
+                if col not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE applications ADD COLUMN {col} {typ}")
+                    except Exception:
+                        pass
+
+            conn.execute("PRAGMA user_version = 6")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 6 (Application Packaging & Checkpointing).")
     except Exception as e:
         print(f"[DB Migration] Error running migrations: {e}")
 
@@ -718,10 +738,12 @@ def log_message(msg):
 def save_to_db(url, title, company, platform, status, detail="", score=0, strengths=None, gaps=None,
                dedup_key=None, content_hash=None, rag_score=None, seniority=None, skill_overlap=None,
                eval_model=None, prompt_version=None, jd_text=None,
-               features_json=None, decision_reason=None, outcome_stage=None):
+               features_json=None, decision_reason=None, outcome_stage=None,
+               package_path=None, checkpoint=None, resume_version=None,
+               cover_letter_version=None, answers_version=None):
     """
     Save application to SQLite database. Keeps exact same call signature with optional score/strengths/gaps.
-    Atomic insert with update on conflict, auto-populating dedup_key and content_hash.
+    Atomic insert with update on conflict, auto-populating dedup_key, content_hash, package_path, and checkpoint.
     """
     if not url:
         return
@@ -740,9 +762,10 @@ def save_to_db(url, title, company, platform, status, detail="", score=0, streng
                         url, title, company, platform, status, score, reason, strengths, gaps,
                         applied_at, updated_at, dedup_key, content_hash,
                         rag_score, seniority, skill_overlap, eval_model, prompt_version, jd_text,
-                        features_json, decision_reason, outcome_stage
+                        features_json, decision_reason, outcome_stage,
+                        package_path, checkpoint, resume_version, cover_letter_version, answers_version
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(url) DO UPDATE SET
                         title = CASE WHEN excluded.title != '' THEN excluded.title ELSE applications.title END,
                         company = CASE WHEN excluded.company != '' THEN excluded.company ELSE applications.company END,
@@ -763,12 +786,19 @@ def save_to_db(url, title, company, platform, status, detail="", score=0, streng
                         jd_text = CASE WHEN excluded.jd_text IS NOT NULL AND excluded.jd_text != '' THEN excluded.jd_text ELSE applications.jd_text END,
                         features_json = COALESCE(excluded.features_json, applications.features_json),
                         decision_reason = COALESCE(excluded.decision_reason, applications.decision_reason),
-                        outcome_stage = COALESCE(excluded.outcome_stage, applications.outcome_stage)
+                        outcome_stage = COALESCE(excluded.outcome_stage, applications.outcome_stage),
+                        package_path = COALESCE(excluded.package_path, applications.package_path),
+                        checkpoint = COALESCE(excluded.checkpoint, applications.checkpoint),
+                        resume_version = COALESCE(excluded.resume_version, applications.resume_version),
+                        cover_letter_version = COALESCE(excluded.cover_letter_version, applications.cover_letter_version),
+                        answers_version = COALESCE(excluded.answers_version, applications.answers_version)
                 """, (
                     url, title, company, platform, status, score or 0, detail or "", strengths_json, gaps_json,
                     now, now, dk, ch,
                     rag_score, seniority, skill_overlap, eval_model, prompt_version, jd_text,
-                    features_json, decision_reason, outcome_stage or "discovered"
+                    features_json, decision_reason, outcome_stage or "discovered",
+                    package_path, checkpoint or "discovered", resume_version or "v1",
+                    cover_letter_version or "v1", answers_version or "v1"
                 ))
                 conn.commit()
 
@@ -787,6 +817,137 @@ def save_to_db(url, title, company, platform, status, detail="", score=0, streng
             recalculate_metrics_unlocked()
         except Exception as e:
             log_message(f"Error saving to DB: {e}")
+
+def set_checkpoint(url: str, checkpoint: str):
+    """Atomically record application execution checkpoint in SQLite."""
+    now = datetime.now().isoformat()
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE applications
+                    SET checkpoint = ?, updated_at = ?
+                    WHERE url = ?
+                """, (checkpoint, now, url))
+                conn.commit()
+            log_message(f"[CHECKPOINT] {url[:35]} -> {checkpoint}")
+        except Exception as e:
+            log_message(f"Error setting checkpoint for {url}: {e}")
+
+def get_checkpoint(url: str) -> str:
+    """Retrieve last known execution checkpoint for crash-safe resumption."""
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT checkpoint FROM applications WHERE url = ?", (url,))
+                row = cursor.fetchone()
+                return (row[0] if row and row[0] else "discovered")
+        except Exception as e:
+            log_message(f"Error getting checkpoint for {url}: {e}")
+            return "discovered"
+
+def update_application_package(url: str, package_path: str, resume_v: str = "v1", cl_v: str = "v1", answers_v: str = "v1"):
+    """Link prepared application package directory and versions to application record."""
+    now = datetime.now().isoformat()
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE applications
+                    SET package_path = ?, resume_version = ?, cover_letter_version = ?, answers_version = ?, updated_at = ?
+                    WHERE url = ?
+                """, (package_path, resume_v, cl_v, answers_v, now, url))
+                conn.commit()
+            log_message(f"[PACKAGE LINKED] {url[:35]} -> {package_path}")
+        except Exception as e:
+            log_message(f"Error updating application package for {url}: {e}")
+
+def record_outcome(url: str, outcome_stage: str, notes: str = "", response_time_hours: float = None):
+    """
+    Ingest application outcome event (applied, interview, offer, rejected, ghosted).
+    Updates application outcome_stage and outcome_notes for calibration learning loop.
+    """
+    now = datetime.now().isoformat()
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE applications
+                    SET outcome_stage = ?, outcome_notes = ?, updated_at = ?
+                    WHERE url = ?
+                """, (outcome_stage, notes, now, url))
+                conn.commit()
+            log_message(f"[OUTCOME INGESTED] {url[:35]} -> {outcome_stage.upper()} ({notes})")
+            recalculate_metrics_unlocked()
+        except Exception as e:
+            log_message(f"Error recording outcome for {url}: {e}")
+
+
+def get_outcome_calibration_summary() -> dict:
+    """
+    Analyzes historical application outcomes to answer:
+    'Which job characteristics actually produce interviews for this candidate?'
+    Returns conversion metrics grouped by outcome stage, resume version, and score tiers.
+    """
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT 
+                        IFNULL(outcome_stage, 'discovered') as stage,
+                        COUNT(*) as total,
+                        AVG(score) as avg_score,
+                        AVG(rag_score) as avg_rag,
+                        AVG(skill_overlap) as avg_overlap
+                    FROM applications
+                    GROUP BY outcome_stage
+                """)
+                stage_rows = cursor.fetchall()
+                stage_stats = {}
+                for r in stage_rows:
+                    stage_stats[r[0]] = {
+                        "count": r[1],
+                        "avg_score": round(r[2] or 0.0, 1),
+                        "avg_rag": round(r[3] or 0.0, 3),
+                        "avg_overlap": round(r[4] or 0.0, 3),
+                    }
+
+                cursor.execute("""
+                    SELECT 
+                        IFNULL(resume_version, 'base') as r_ver,
+                        COUNT(*) as total_apps,
+                        SUM(CASE WHEN outcome_stage IN ('interview', 'offer') THEN 1 ELSE 0 END) as positive_outcomes
+                    FROM applications
+                    WHERE resume_version IS NOT NULL
+                    GROUP BY resume_version
+                """)
+                ver_rows = cursor.fetchall()
+                ver_stats = {}
+                for r in ver_rows:
+                    total = r[1]
+                    pos = r[2]
+                    rate = round((pos / total) * 100, 1) if total > 0 else 0.0
+                    ver_stats[r[0]] = {"total": total, "interviews": pos, "interview_rate": rate}
+
+                total_applied = stage_stats.get("applied", {}).get("count", 0) + stage_stats.get("interview", {}).get("count", 0) + stage_stats.get("offer", {}).get("count", 0) + stage_stats.get("rejected", {}).get("count", 0)
+                interview_cnt = stage_stats.get("interview", {}).get("count", 0) + stage_stats.get("offer", {}).get("count", 0)
+                overall_interview_rate = round((interview_cnt / total_applied) * 100, 1) if total_applied > 0 else 0.0
+
+                return {
+                    "stage_breakdown": stage_stats,
+                    "resume_version_performance": ver_stats,
+                    "total_applied": total_applied,
+                    "interview_count": interview_cnt,
+                    "interview_rate": overall_interview_rate,
+                }
+        except Exception as e:
+            log_message(f"Error generating outcome calibration summary: {e}")
+            return {"error": str(e)}
 
 def update_job_status_in_csv(url_key, old_status, new_status, new_detail=""):
     """
