@@ -24,9 +24,11 @@ def normalize_company(c: str) -> str:
     """Strip legal suffixes (inc, ltd, llc, pvt) and punctuation for cross-platform dedup."""
     if not c:
         return ""
-    c = c.lower().strip()
-    c = re.sub(r"\b(inc\.?|incorporated|ltd\.?|limited|llc|pvt\.?|private|corp\.?|corporation|co\.?|gmbh)\b", "", c)
-    return re.sub(r"[^a-z0-9]", "", c)
+    c_lower = c.strip().lower()
+    if c_lower in ("nan", "none", "null", "undefined"):
+        return ""
+    c_norm = re.sub(r"\b(inc\.?|incorporated|ltd\.?|limited|llc|pvt\.?|private|corp\.?|corporation|co\.?|gmbh)\b", "", c_lower)
+    return re.sub(r"[^a-z0-9]", "", c_norm)
 
 def normalize_location(loc: str) -> str:
     """Standardize location strings, grouping remote and hybrid variants."""

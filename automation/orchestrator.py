@@ -67,7 +67,7 @@ class JobLifecycleResult:
 def process_job(
     job: Dict[str, Any],
     cfg: Optional[Dict[str, Any]] = None,
-    dry_run: bool = False,
+    dry_run: Optional[bool] = None,
     auto_prepare: bool = True,
 ) -> JobLifecycleResult:
     """
@@ -76,6 +76,9 @@ def process_job(
     """
     if cfg is None:
         cfg = CONFIG or load_config()
+
+    if dry_run is None:
+        dry_run = bool(cfg.get("settings", {}).get("dry_run_mode", True))
 
     title = (job.get("title") or "Unknown Role").strip()
     raw_comp = str(job.get("company") or "").strip()

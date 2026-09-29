@@ -21,6 +21,7 @@ tailored_resumes/
 application_packages/
 eval/runs/
 eval/labels.jsonl
+eval/holdout_labels.jsonl
 *.log
 *.png
 *.jpg

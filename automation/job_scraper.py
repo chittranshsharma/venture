@@ -75,16 +75,22 @@ def fast_scrape_jobs(query="Software Engineer", location="", limit=20):
         )
         
         if not jobs_df.empty:
+            def _clean_str(val):
+                if val is None:
+                    return ""
+                s = str(val).strip()
+                return "" if s.lower() in ("nan", "none", "null", "undefined") else s
+
             for _, row in jobs_df.iterrows():
                 results.append({
-                    "title": str(row.get("title", "")),
-                    "company": str(row.get("company", "")),
-                    "location": str(row.get("location", "")),
-                    "platform": str(row.get("site", "")).capitalize(),
-                    "url": str(row.get("job_url", "")),
-                    "description": str(row.get("description", ""))
+                    "title": _clean_str(row.get("title", "")),
+                    "company": _clean_str(row.get("company", "")),
+                    "location": _clean_str(row.get("location", "")),
+                    "platform": _clean_str(row.get("site", "")).capitalize(),
+                    "url": _clean_str(row.get("job_url", "")),
+                    "description": _clean_str(row.get("description", ""))
                 })
-            log_message(f"\u26a1 JobSpy Scraper: Discovered {len(results)} jobs!")
+            log_message(f"⚡ JobSpy Scraper: Discovered {len(results)} jobs!")
             # B1 FIX: return after dedup+filter, don't fall through to LinkedIn scraper
             return _filter_jobs(results, query)
     except Exception as e:
