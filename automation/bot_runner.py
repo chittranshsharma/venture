@@ -7,11 +7,13 @@ import urllib.parse
 from playwright.async_api import async_playwright
 import core.state as state
 from core.config_manager import CONFIG, get_location_search_term, encode_query_for_url, SCREENSHOTS_DIR
-from core.db_manager import log_message, save_to_db, load_applied_urls, recalculate_metrics, APPLIED_URLS_SET, init_applied_urls, update_job_status_in_csv, save_recruiter_contact
+from core.db_manager import log_message, save_to_db, load_applied_urls, recalculate_metrics, APPLIED_URLS_SET, init_applied_urls, update_job_status_in_csv, save_recruiter_contact, route, compute_content_hash, compute_dedup_key, log_evaluation
 from core.state_machine import JobState, transition, get_job_state, is_job_completed
 from core.contact_extractor import extract_recruiter_contacts
 from core.credential_store import get_credential
+import json
 from automation.llm_evaluator import evaluate_job_with_qwen
+from automation.composite_scorer import evaluate_opportunity, should_invoke_llm
 from automation.form_autofiller import auto_fill_playwright_form
 from automation.job_scraper import fast_scrape_jobs
 import importlib
@@ -283,41 +285,201 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
         p_str = phone_matches[0] if phone_matches else ""
         hr_str = hr_matches[0] if hr_matches else "Hiring Manager"
         save_recruiter_contact(company, title, hr_str, e_str, p_str, platform, href)
+
+    if CONFIG.get("settings", {}).get("collect_only", False):
+        dk = compute_dedup_key(company, title)
+        ch = compute_content_hash(desc_text)
+        log_evaluation(
+            url=href, title=title, company=company, jd_text=desc_text,
+            llm_score=None, rag_score=None,
+            route="collected", propensity=None,
+            eval_model=None, prompt_version=None,
+            dedup_key=dk, content_hash=ch
+        )
+        log_message(f"📁 [COLLECT ONLY] Stored raw JD for '{title}' at '{company}'")
+        return False
         
-    try:
-        eval_res = await asyncio.to_thread(evaluate_job_with_qwen, title, desc_text)
-        if eval_res is None:
-            eval_res = {}
-    except Exception as e:
-        log_message(f"LLM evaluation error for '{title}': {e}")
-        eval_res = {}
-    score = eval_res.get("score", 0)
-    is_match = eval_res.get("is_match", False)
-    reason = eval_res.get("reason", "")
-    should_approve = eval_res.get("should_approve", False)
-    
-    if is_match:
+    ch = compute_content_hash(desc_text)
+    dk = compute_dedup_key(company, title)
+
+    # 1. Deterministic Opportunity Evaluation (Invariants + Free Signals + Calibrated Scoring)
+    signals = await asyncio.to_thread(evaluate_opportunity, title, company, desc_text, CONFIG)
+
+    # Tier-1 Invariants: Instant Hard Block (Zero LLM)
+    if signals.hard_block:
+        hard_reason_str = f"Tier-1 Invariant Hard Block: {signals.hard_reason}"
+        log_message(f"⛔ Hard Block [{signals.hard_reason}]: Skipped '{title}' at '{company}'")
+        features_json_str = json.dumps(signals.to_features_dict())
+        log_evaluation(
+            url=href, title=title, company=company, jd_text=desc_text,
+            llm_score=0, rag_score=0.0,
+            seniority="entry", skill_overlap=0.0,
+            route="constraint", propensity=0.0,
+            eval_model=None, prompt_version=None,
+            dedup_key=dk, content_hash=ch,
+            features_json=features_json_str, decision_reason=hard_reason_str,
+            outcome_stage="rejected"
+        )
+        save_to_db(href, title, company, platform, "Skipped", hard_reason_str,
+                   score=0, rag_score=0.0, seniority="entry",
+                   skill_overlap=0.0, jd_text=desc_text,
+                   content_hash=ch, dedup_key=dk,
+                   features_json=features_json_str, decision_reason=hard_reason_str,
+                   outcome_stage="rejected")
         try:
-            transition(href, JobState.QUALIFIED)
+            transition(href, JobState.REJECTED, detail=hard_reason_str)
         except Exception:
             pass
-        if score >= 85:
-            from core.notifier import notify
-            notify("JobPilot — Strong Match", f"{title} at {company} ({score}%)")
-        if should_approve:
-            log_message(f"DOUBT DETECTED ({score}%): Queueing '{title}' at '{company}' in Approvals.")
-            with state.DOUBT_LOCK:
-                state.DOUBT_QUEUE.append({
-                    "title": title, "company": company, "url": href, 
-                    "platform": platform, "score": score, "reason": reason, "description": desc_text
-                })
-            save_to_db(href, title, company, platform, "Approval Needed", reason)
-            return True
-        else:
-            try:
-                transition(href, JobState.APPROVED)
-            except Exception:
-                pass
+        return False
+
+    score = signals.deterministic_score
+    routing = signals.route
+    propensity = signals.propensity
+    features = signals.to_features_dict()
+    min_score = CONFIG.get("settings", {}).get("min_score", 70)
+
+    # 2. Selective Local LLM Ambiguity Resolution (Stretch & Borderline cases only)
+    llm_res = {}
+    llm_invoked = False
+    if should_invoke_llm(signals, min_score=min_score):
+        log_message(f"🧠 Ambiguity Resolver: Invoking local LLM for '{title}' at '{company}' (score={score}%, stretch={signals.is_stretch})...")
+        try:
+            llm_res = await asyncio.to_thread(evaluate_job_with_qwen, title, desc_text)
+            if llm_res is None:
+                llm_res = {}
+            llm_invoked = True
+        except Exception as e:
+            log_message(f"LLM evaluation warning for '{title}': {e}")
+            llm_res = {}
+
+    # VENTURE GUARDRAIL: The LLM does NOT silently modify the deterministic score.
+    features["llm_invoked"] = llm_invoked
+    features["llm_score"] = llm_res.get("score")
+    features["score_adjustment"] = 0
+
+    strengths = llm_res.get("strengths") or [f"Proficient in {s}" for s in signals.matched_skills] or ["Relevant technical background"]
+    gaps = llm_res.get("gaps") or [f"Missing required skill: {s}" for s in signals.missing_skills] or []
+    if signals.total_penalty > 0:
+        for p in signals.penalties:
+            gaps.append(f"{p.get('type')}: {p.get('evidence')}")
+
+    llm_reason_note = llm_res.get("reason", "")
+    decision_reason = signals.generate_decision_reason(llm_reason=llm_reason_note if llm_invoked else None)
+    features["decision_reason"] = decision_reason
+    features_json_str = json.dumps(features)
+
+    # Persist every evaluated job to append-only evaluations table (queue, explore, or reject)
+    log_evaluation(
+        url=href, title=title, company=company, jd_text=desc_text,
+        llm_score=score, rag_score=signals.rag_score,
+        seniority=llm_res.get("seniority", "mid"), skill_overlap=signals.jd_coverage,
+        route=routing, propensity=propensity,
+        eval_model=llm_res.get("eval_model") or "deterministic+qwen",
+        prompt_version=llm_res.get("prompt_version"),
+        dedup_key=dk, content_hash=ch,
+        features_json=features_json_str, decision_reason=decision_reason,
+        outcome_stage="discovered" if routing != "reject" else "rejected"
+    )
+
+    if routing == "reject":
+        log_message(f"{platform} skipped ({score}%): {decision_reason}")
+        save_to_db(href, title, company, platform, "Skipped", decision_reason,
+                   score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
+                   skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
+                   prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
+                   content_hash=ch, dedup_key=dk,
+                   features_json=features_json_str, decision_reason=decision_reason,
+                   outcome_stage="rejected")
+        try:
+            transition(href, JobState.REJECTED, detail=decision_reason)
+        except Exception:
+            pass
+        return False
+
+    if routing == "explore":
+        tag = "STRETCH OPPORTUNITY" if signals.is_stretch else "BORDERLINE FIT"
+        log_message(f"🔍 {tag} ({score}%): Queueing '{title}' at '{company}' in Approvals.")
+        with state.DOUBT_LOCK:
+            state.DOUBT_QUEUE.append({
+                "title": title, "company": company, "url": href, 
+                "platform": platform, "score": score, "reason": f"[{tag}] {decision_reason}",
+                "description": desc_text, "source": "explore",
+                "propensity": propensity,
+                "rag_score": signals.rag_score,
+                "seniority": llm_res.get("seniority", "mid"),
+                "skill_overlap": signals.jd_coverage,
+                "eval_model": llm_res.get("eval_model"),
+                "prompt_version": llm_res.get("prompt_version"),
+                "strengths": strengths,
+                "gaps": gaps,
+                "content_hash": ch,
+                "dedup_key": dk,
+                "features_json": features_json_str,
+                "features": features,
+                "decision_reason": decision_reason,
+                "is_stretch": signals.is_stretch,
+                "penalties": signals.penalties,
+                "stretch_signals": signals.stretch_signals,
+            })
+        save_to_db(href, title, company, platform, "Approval Needed", f"[{tag}] {decision_reason}",
+                   score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
+                   skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
+                   prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
+                   content_hash=ch, dedup_key=dk,
+                   features_json=features_json_str, decision_reason=decision_reason,
+                   strengths=strengths, gaps=gaps,
+                   outcome_stage="discovered")
+        return True
+
+    # High Fit (routing == "queue")
+    try:
+        transition(href, JobState.QUALIFIED)
+    except Exception:
+        pass
+    if score >= 85:
+        from core.notifier import notify
+        notify("JobPilot — Strong Match", f"{title} at {company} ({score}%)")
+
+    should_approve = llm_res.get("should_approve", False)
+    require_approval = CONFIG.get("settings", {}).get("require_approval", True)
+    if should_approve or require_approval:
+        log_message(f"MATCH QUALIFIED ({score}%): Queueing '{title}' at '{company}' in Approvals.")
+        with state.DOUBT_LOCK:
+            state.DOUBT_QUEUE.append({
+                "title": title, "company": company, "url": href, 
+                "platform": platform, "score": score, "reason": decision_reason, "description": desc_text,
+                "source": "queue",
+                "propensity": propensity,
+                "rag_score": signals.rag_score,
+                "seniority": llm_res.get("seniority", "mid"),
+                "skill_overlap": signals.jd_coverage,
+                "eval_model": llm_res.get("eval_model"),
+                "prompt_version": llm_res.get("prompt_version"),
+                "strengths": strengths,
+                "gaps": gaps,
+                "content_hash": ch,
+                "dedup_key": dk,
+                "features_json": features_json_str,
+                "features": features,
+                "decision_reason": decision_reason,
+                "is_stretch": signals.is_stretch,
+                "penalties": signals.penalties,
+                "stretch_signals": signals.stretch_signals,
+            })
+        save_to_db(href, title, company, platform, "Approval Needed", decision_reason,
+                   score=score, rag_score=signals.rag_score, seniority=llm_res.get("seniority", "mid"),
+                   skill_overlap=signals.jd_coverage, eval_model=llm_res.get("eval_model"),
+                   prompt_version=llm_res.get("prompt_version"), jd_text=desc_text,
+                   content_hash=ch, dedup_key=dk,
+                   features_json=features_json_str, decision_reason=decision_reason,
+                   strengths=strengths, gaps=gaps,
+                   outcome_stage="discovered")
+        return True
+    else:
+        try:
+            transition(href, JobState.APPROVED)
+        except Exception:
+            pass
             
         sc_path = os.path.join(SCREENSHOTS_DIR, f"{platform.lower()}_match_{random.randint(1000, 9999)}.png")
         try:
@@ -488,14 +650,7 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
             else:
                 save_to_db(href, title, company, "LinkedIn", "Suggested", "Apply manually")
         return True
-    else:
-        log_message(f"{platform} skipped ({score}%): {reason}")
-        save_to_db(href, title, company, platform, "Skipped", reason)
-        try:
-            transition(href, JobState.REJECTED, detail=reason)
-        except Exception:
-            pass
-        return False
+
 
 
 def get_edge_executable_path():
@@ -512,6 +667,48 @@ def get_edge_executable_path():
 async def run_bot_async():
     log_message("Starting Local Job Bot Loop...")
     init_applied_urls()
+
+    if CONFIG.get("settings", {}).get("collect_only", False):
+        log_message("📁 COLLECT-ONLY MODE ACTIVE: Collecting JDs across queries without LLM evaluation or auto-apply.")
+        queries = CONFIG.get("settings", {}).get("queries", ["Software Engineer"])
+        preferred_locs = CONFIG.get("settings", {}).get("preferred_locations", [])
+        locs = preferred_locs if preferred_locs else ["India", "Remote", ""]
+        total_collected = 0
+        for q in queries:
+            if not state.BOT_RUNNING:
+                break
+            for loc in locs:
+                if not state.BOT_RUNNING:
+                    break
+                try:
+                    scraped_jobs = await asyncio.to_thread(fast_scrape_jobs, query=q, location=loc, limit=30)
+                    for job in scraped_jobs:
+                        desc = job.get("description", "")
+                        if not job.get("url") or not desc:
+                            continue
+                        dk = compute_dedup_key(job.get("company", ""), job.get("title", ""))
+                        ch = compute_content_hash(desc)
+                        log_evaluation(
+                            url=job["url"],
+                            title=job.get("title", ""),
+                            company=job.get("company", ""),
+                            jd_text=desc,
+                            llm_score=None,
+                            rag_score=None,
+                            route="collected",
+                            propensity=None,
+                            eval_model=None,
+                            prompt_version=None,
+                            dedup_key=dk,
+                            content_hash=ch
+                        )
+                        total_collected += 1
+                except Exception as e:
+                    log_message(f"Collect-only error ({q}, {loc}): {e}")
+        log_message(f"📁 COLLECT-ONLY COMPLETE: Harvested {total_collected} job descriptions in evaluations table.")
+        state.BOT_RUNNING = False
+        state.CURRENT_STATUS = "Idle"
+        return
     
     async with async_playwright() as p:
         try:

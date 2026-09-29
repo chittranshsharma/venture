@@ -4,8 +4,76 @@ import json
 import sqlite3
 import shutil
 import threading
+import re
+import hashlib
+import random
 from datetime import datetime
 import core.state as state
+
+def normalize_jd(t: str) -> str:
+    """Normalize JD text, removing volatile scrape artifacts while preserving numbers and YOE."""
+    t = (t or "").lower()
+    t = re.sub(r"\b(posted|reposted|updated)\b[^.\n]{0,40}\bago\b", " ", t)
+    t = re.sub(r"\b\d[\d,]*\+?\s+(applicants?|applications?|views?|clicks?|people)\b", " ", t)
+    t = re.sub(r"\b(be among the first|over)\s+\d+\s+applicants?\b", " ", t)
+    t = re.sub(r"https?://\S+", " ", t)
+    t = re.sub(r"[^\w\s+#.$-]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+def normalize_company(c: str) -> str:
+    """Strip legal suffixes (inc, ltd, llc, pvt) and punctuation for cross-platform dedup."""
+    if not c:
+        return ""
+    c = c.lower().strip()
+    c = re.sub(r"\b(inc\.?|incorporated|ltd\.?|limited|llc|pvt\.?|private|corp\.?|corporation|co\.?|gmbh)\b", "", c)
+    return re.sub(r"[^a-z0-9]", "", c)
+
+def normalize_location(loc: str) -> str:
+    """Standardize location strings, grouping remote and hybrid variants."""
+    if not loc:
+        return ""
+    loc = loc.lower().strip()
+    if "remote" in loc:
+        return "remote"
+    if "hybrid" in loc:
+        return "hybrid"
+    return re.sub(r"[^a-z0-9]", "", loc)
+
+def compute_dedup_key(company: str, title: str, location: str = "") -> str:
+    """Canonical cross-platform job key: sha256(norm_company|norm_title|norm_loc)[:16]."""
+    norm_c = normalize_company(company)
+    norm_t = re.sub(r'[^a-z0-9]', '', (title or "").lower())
+    norm_l = normalize_location(location)
+    raw = f"{norm_c}|{norm_t}|{norm_l}"
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]
+
+def compute_content_hash(text: str) -> str:
+    """Normalized JD content hash to detect genuine revisions, ignoring dynamic scrape artifacts."""
+    norm = normalize_jd(text)
+    return hashlib.sha256(norm.encode('utf-8')).hexdigest()[:16]
+
+def _u(url: str, content_hash: str) -> float:
+    """Deterministic pseudo-random float in [0.0, 1.0) derived from SHA256(url|content_hash)."""
+    if not url and not content_hash:
+        return random.random()
+    h = hashlib.sha256(f"{url}|{content_hash}".encode('utf-8')).digest()
+    return int.from_bytes(h[:4], "big") / 2**32
+
+def route(score: int, min_score: int, url: str = "", content_hash: str = "", explore_rate: float = 0.15, band: int = 20) -> tuple[str, float]:
+    """
+    Deterministic exploration routing using SHA256(url|content_hash).
+    Returns (routing_action, propensity).
+    - score >= min_score: ('queue', 1.0)
+    - score in [min_score - band, min_score): ('explore', explore_rate) if _u < explore_rate else ('reject', explore_rate)
+    - score < min_score - band: ('reject', 0.0)
+    """
+    if score >= min_score:
+        return "queue", 1.0
+    if score >= min_score - band:
+        sampled = _u(url, content_hash) < explore_rate
+        return ("explore" if sampled else "reject"), explore_rate
+    return "reject", 0.0
+
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SQLITE_DB_PATH = os.path.join(BASE_DIR, "venture.db")
@@ -35,7 +103,8 @@ def _init_db_schema():
     """Initialize SQLite tables and indices as specified in Phase 2."""
     with DB_LOCK:
         try:
-            with _get_connection() as conn:
+            conn = _get_connection()
+            try:
                 cursor = conn.cursor()
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS applications (
@@ -80,9 +149,372 @@ def _init_db_schema():
                     logged_at TEXT DEFAULT (datetime('now'))
                 );
                 """)
+
+                # Versioned column migrations — run while we already hold the lock and connection
+                _run_schema_migrations_locked(conn)
                 conn.commit()
+            finally:
+                conn.close()
         except Exception as e:
             print(f"Error initializing SQLite database: {e}")
+
+
+def _backfill_hashes_locked(conn, force_all: bool = False):
+    """Backfill or re-normalize dedup_key and content_hash for application rows."""
+    try:
+        cursor = conn.cursor()
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(applications)").fetchall()]
+        has_jd = "jd_text" in cols
+        jd_select = "jd_text" if has_jd else "reason AS jd_text"
+        query = f"SELECT id, company, title, {jd_select}, reason FROM applications"
+        if not force_all:
+            query += " WHERE dedup_key IS NULL OR content_hash IS NULL"
+        rows = cursor.execute(query).fetchall()
+        for row_id, comp, tit, jdt, reas in rows:
+            dk = compute_dedup_key(comp or "", tit or "")
+            ch = compute_content_hash(jdt or reas or tit or "")
+            cursor.execute(
+                "UPDATE applications SET dedup_key = ?, content_hash = ? WHERE id = ?",
+                (dk, ch, row_id)
+            )
+        if rows:
+            print(f"[DB Migration] Computed normalized dedup_key and content_hash for {len(rows)} application rows.")
+    except Exception as e:
+        print(f"[DB Migration] Warning during hash backfill: {e}")
+
+
+def _run_schema_migrations_locked(conn):
+    """
+    Versioned schema migrations using PRAGMA user_version.
+    MUST be called while DB_LOCK is already held (called from _init_db_schema).
+    Safe to run on every startup — each step is idempotent.
+
+    Version 1: Feature columns for outcome learning, dedup, eval tracking,
+               and the processed_emails dedup table for email-sync.
+    Version 2: Append-only decisions table for ML training with feature snapshot,
+               composite indexes, and hash backfill for existing rows.
+    Version 3: Append-only evaluations table logging EVERY evaluated job across all routes,
+               propensity column on decisions, and hash re-normalization.
+    """
+    try:
+        v = conn.execute("PRAGMA user_version").fetchone()[0]
+
+        if v < 1:
+            new_cols = [
+                ("rag_score",        "REAL"),
+                ("seniority",        "TEXT"),
+                ("skill_overlap",    "REAL"),
+                ("jd_text",          "TEXT"),
+                # dedup_key  = sha256(company|title|location) — cross-platform dedup
+                ("dedup_key",        "TEXT"),
+                # content_hash = sha256(normalized jd_text) — re-eval when JD content changes
+                ("content_hash",     "TEXT"),
+                # approval_label: 'approve'|'reject' from human decisions (primary LR label)
+                ("approval_label",   "TEXT"),
+                # eval harness: track which model+prompt produced each score
+                ("prompt_version",   "TEXT"),
+                ("eval_model",       "TEXT"),
+                # rejection_source: 'constraint'|'llm'|'pre_filter' — exclude from score stats
+                ("rejection_source", "TEXT"),
+            ]
+            for col, typ in new_cols:
+                try:
+                    conn.execute(f"ALTER TABLE applications ADD COLUMN {col} {typ}")
+                except Exception:
+                    pass  # column already exists — safe to ignore
+
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_dedup        ON applications(dedup_key)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_content_hash ON applications(content_hash)")
+            except Exception:
+                pass
+
+            # processed_emails: Message-ID dedup so email sync never double-processes
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS processed_emails (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id      TEXT NOT NULL UNIQUE,
+                    matched_url     TEXT,
+                    detected_status TEXT,
+                    processed_at    TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_email_msgid ON processed_emails(message_id)")
+            except Exception:
+                pass
+
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 1.")
+
+        if v < 2:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT NOT NULL,
+                    content_hash TEXT,
+                    label TEXT CHECK(label IN ('approve','reject')),
+                    reject_reason TEXT,      -- not_fit|location|seniority|duplicate|company|other
+                    llm_score INTEGER,
+                    rag_score REAL,
+                    seniority TEXT,
+                    skill_overlap REAL,
+                    eval_model TEXT,
+                    prompt_version TEXT,
+                    source TEXT,             -- queue|explore
+                    decided_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_url ON decisions(url)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_applications_dedup ON applications(dedup_key)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_applications_chash ON applications(content_hash)")
+            except Exception:
+                pass
+
+            _backfill_hashes_locked(conn)
+
+            conn.execute("PRAGMA user_version = 2")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 2.")
+
+        if v < 3:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS evaluations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT NOT NULL,
+                    dedup_key TEXT,
+                    content_hash TEXT,
+                    title TEXT,
+                    company TEXT,
+                    jd_text TEXT,
+                    llm_score INTEGER,
+                    rag_score REAL,
+                    seniority TEXT,
+                    skill_overlap REAL,
+                    route TEXT,              -- queue|explore|reject|prefilter|constraint
+                    propensity REAL,         -- P(shown to human); 1.0 for queue
+                    eval_model TEXT,
+                    prompt_version TEXT,
+                    evaluated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_url ON evaluations(url)")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE decisions ADD COLUMN propensity REAL")
+            except Exception:
+                pass
+
+            _backfill_hashes_locked(conn, force_all=True)
+
+            conn.execute("PRAGMA user_version = 3")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 3.")
+
+        if v < 4:
+            eval_cols = [r[1] for r in conn.execute("PRAGMA table_info(evaluations)").fetchall()]
+            if "embedding_model" not in eval_cols:
+                try:
+                    conn.execute("ALTER TABLE evaluations ADD COLUMN embedding_model TEXT")
+                except Exception:
+                    pass
+
+            try:
+                conn.execute("""
+                    DELETE FROM evaluations
+                    WHERE id NOT IN (
+                        SELECT MIN(id)
+                        FROM evaluations
+                        GROUP BY url, content_hash, IFNULL(eval_model, ''), IFNULL(prompt_version, '')
+                    )
+                """)
+                conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS ux_eval_dedupe
+                    ON evaluations(url, content_hash, IFNULL(eval_model, ''), IFNULL(prompt_version, ''))
+                """)
+            except Exception as e:
+                print(f"[DB Migration] Note on ux_eval_dedupe: {e}")
+
+            _backfill_hashes_locked(conn, force_all=True)
+
+            conn.execute("PRAGMA user_version = 4")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 4.")
+
+        if v < 5:
+            # Telemetry for full explainability and closed-loop career outcome tracking
+            for tbl in ["evaluations", "applications"]:
+                cols = [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()]
+                if "features_json" not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN features_json TEXT")
+                    except Exception:
+                        pass
+                if "decision_reason" not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN decision_reason TEXT")
+                    except Exception:
+                        pass
+                if "outcome_stage" not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN outcome_stage TEXT DEFAULT 'discovered'")
+                    except Exception:
+                        pass
+                if "outcome_notes" not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN outcome_notes TEXT")
+                    except Exception:
+                        pass
+
+            conn.execute("PRAGMA user_version = 5")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 5 (Telemetry & Outcome Engine).")
+    except Exception as e:
+        print(f"[DB Migration] Error running migrations: {e}")
+
+
+def log_evaluation(
+    url: str,
+    title: str,
+    company: str,
+    jd_text: str,
+    llm_score: int = None,
+    rag_score: float = None,
+    seniority: str = None,
+    skill_overlap: float = None,
+    route: str = "queue",
+    propensity: float = 1.0,
+    eval_model: str = None,
+    prompt_version: str = None,
+    embedding_model: str = None,
+    dedup_key: str = None,
+    content_hash: str = None,
+    features_json: str = None,
+    decision_reason: str = None,
+    outcome_stage: str = "discovered",
+):
+    """
+    Log every evaluated job to the `evaluations` table regardless of outcome (queue, explore, reject, collected).
+    Uses INSERT OR IGNORE against ux_eval_dedupe to eliminate radar poll duplication.
+    """
+    now = datetime.now().isoformat()
+    dk = dedup_key or compute_dedup_key(company, title)
+    ch = content_hash or compute_content_hash(jd_text)
+
+    with DB_LOCK:
+        conn = None
+        try:
+            conn = _get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO evaluations (
+                    url, dedup_key, content_hash, title, company, jd_text,
+                    llm_score, rag_score, seniority, skill_overlap,
+                    route, propensity, eval_model, prompt_version, embedding_model,
+                    features_json, decision_reason, outcome_stage, evaluated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                url, dk, ch, title, company, jd_text,
+                llm_score, rag_score, seniority, skill_overlap,
+                route, propensity, eval_model, prompt_version, embedding_model,
+                features_json, decision_reason, outcome_stage, now
+            ))
+            conn.commit()
+        except Exception as e:
+            log_message(f"Error logging evaluation for {url}: {e}")
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+
+def log_approval_decision(
+    url: str,
+    label: str,
+    reject_reason: str = None,
+    score: int = None,
+    eval_model: str = None,
+    prompt_version: str = None,
+    rag_score: float = None,
+    seniority: str = None,
+    skill_overlap: float = None,
+    content_hash: str = None,
+    source: str = "queue",
+    propensity: float = 1.0,
+):
+    """
+    Record an append-only human approve/reject decision with full feature snapshot.
+    Stored in `decisions` table for unbiased ML model training (logistic regression).
+    Also updates `applications.approval_label` for current state visibility.
+    """
+    if propensity is None or propensity <= 0:
+        propensity = 0.001  # IPW division-by-zero safety clamp
+    assert propensity > 0, "Propensity must be strictly positive"
+    now = datetime.now().isoformat()
+    with DB_LOCK:
+        conn = None
+        try:
+            conn = _get_connection()
+            cursor = conn.cursor()
+
+            # Fetch existing snapshot features from applications if missing
+            try:
+                row = cursor.execute("""
+                    SELECT content_hash, score, rag_score, seniority, skill_overlap, eval_model, prompt_version
+                    FROM applications WHERE url = ?
+                """, (url,)).fetchone()
+                if row:
+                    if content_hash is None:
+                        content_hash = row[0]
+                    if score is None:
+                        score = row[1]
+                    if rag_score is None:
+                        rag_score = row[2]
+                    if seniority is None:
+                        seniority = row[3]
+                    if skill_overlap is None:
+                        skill_overlap = row[4]
+                    if eval_model is None:
+                        eval_model = row[5]
+                    if prompt_version is None:
+                        prompt_version = row[6]
+            except Exception as ex:
+                log_message(f"Warning retrieving snapshot features for {url}: {ex}")
+
+            # Insert immutable decision snapshot (including propensity for inverse propensity weighting)
+            cursor.execute("""
+                INSERT INTO decisions (
+                    url, content_hash, label, reject_reason,
+                    llm_score, rag_score, seniority, skill_overlap,
+                    eval_model, prompt_version, source, propensity, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                url, content_hash, label, reject_reason,
+                score, rag_score, seniority, skill_overlap,
+                eval_model, prompt_version, source, propensity, now
+            ))
+
+            # Update applications row for backwards compatibility and current-state queries
+            cursor.execute(
+                "UPDATE applications SET approval_label=?, updated_at=? WHERE url=?",
+                (label, now, url)
+            )
+            conn.commit()
+            log_message(f"[DECISION LOGGED] {label.upper()} for {url[:40]} (source={source}, reason={reject_reason or 'fit'}, score={score})")
+        except Exception as e:
+            log_message(f"Error logging approval decision for {url}: {e}")
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 def _migrate_csv_to_sqlite():
     """
@@ -283,24 +715,34 @@ def log_message(msg):
     except Exception:
         pass
 
-def save_to_db(url, title, company, platform, status, detail="", score=0, strengths=None, gaps=None):
+def save_to_db(url, title, company, platform, status, detail="", score=0, strengths=None, gaps=None,
+               dedup_key=None, content_hash=None, rag_score=None, seniority=None, skill_overlap=None,
+               eval_model=None, prompt_version=None, jd_text=None,
+               features_json=None, decision_reason=None, outcome_stage=None):
     """
     Save application to SQLite database. Keeps exact same call signature with optional score/strengths/gaps.
-    Atomic insert with update on conflict.
+    Atomic insert with update on conflict, auto-populating dedup_key and content_hash.
     """
     if not url:
         return
     now = datetime.now().isoformat()
     strengths_json = json.dumps(strengths) if isinstance(strengths, list) else (str(strengths) if strengths else "[]")
     gaps_json = json.dumps(gaps) if isinstance(gaps, list) else (str(gaps) if gaps else "[]")
+    dk = dedup_key or compute_dedup_key(company, title)
+    ch = content_hash or compute_content_hash(jd_text or detail or title)
 
     with DB_LOCK:
         try:
             with _get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO applications (url, title, company, platform, status, score, reason, strengths, gaps, applied_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO applications (
+                        url, title, company, platform, status, score, reason, strengths, gaps,
+                        applied_at, updated_at, dedup_key, content_hash,
+                        rag_score, seniority, skill_overlap, eval_model, prompt_version, jd_text,
+                        features_json, decision_reason, outcome_stage
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(url) DO UPDATE SET
                         title = CASE WHEN excluded.title != '' THEN excluded.title ELSE applications.title END,
                         company = CASE WHEN excluded.company != '' THEN excluded.company ELSE applications.company END,
@@ -310,8 +752,24 @@ def save_to_db(url, title, company, platform, status, detail="", score=0, streng
                         reason = CASE WHEN excluded.reason != '' THEN excluded.reason ELSE applications.reason END,
                         strengths = CASE WHEN excluded.strengths != '[]' THEN excluded.strengths ELSE applications.strengths END,
                         gaps = CASE WHEN excluded.gaps != '[]' THEN excluded.gaps ELSE applications.gaps END,
-                        updated_at = excluded.updated_at
-                """, (url, title, company, platform, status, score or 0, detail or "", strengths_json, gaps_json, now, now))
+                        updated_at = excluded.updated_at,
+                        dedup_key = COALESCE(excluded.dedup_key, applications.dedup_key),
+                        content_hash = COALESCE(excluded.content_hash, applications.content_hash),
+                        rag_score = COALESCE(excluded.rag_score, applications.rag_score),
+                        seniority = COALESCE(excluded.seniority, applications.seniority),
+                        skill_overlap = COALESCE(excluded.skill_overlap, applications.skill_overlap),
+                        eval_model = COALESCE(excluded.eval_model, applications.eval_model),
+                        prompt_version = COALESCE(excluded.prompt_version, applications.prompt_version),
+                        jd_text = CASE WHEN excluded.jd_text IS NOT NULL AND excluded.jd_text != '' THEN excluded.jd_text ELSE applications.jd_text END,
+                        features_json = COALESCE(excluded.features_json, applications.features_json),
+                        decision_reason = COALESCE(excluded.decision_reason, applications.decision_reason),
+                        outcome_stage = COALESCE(excluded.outcome_stage, applications.outcome_stage)
+                """, (
+                    url, title, company, platform, status, score or 0, detail or "", strengths_json, gaps_json,
+                    now, now, dk, ch,
+                    rag_score, seniority, skill_overlap, eval_model, prompt_version, jd_text,
+                    features_json, decision_reason, outcome_stage or "discovered"
+                ))
                 conn.commit()
 
             APPLIED_URLS_SET.add(url)
@@ -550,6 +1008,72 @@ def get_suggested_jobs():
             log_message(f"Error fetching suggestions: {e}")
     return records
 
+def get_pending_approvals():
+    """Load pending approval opportunities from applications table for ApprovalsView."""
+    records = []
+    with DB_LOCK:
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT url, company, title, platform, score, reason, strengths, gaps,
+                           rag_score, seniority, skill_overlap, eval_model, prompt_version,
+                           jd_text, features_json, decision_reason, outcome_stage, content_hash, dedup_key
+                    FROM applications 
+                    WHERE status IN ('Approval Needed', 'Qualified') AND (approval_label IS NULL OR approval_label = '')
+                    ORDER BY score DESC, id DESC
+                """)
+                for row in cursor.fetchall():
+                    strengths_list = []
+                    if row[6]:
+                        try:
+                            strengths_list = json.loads(row[6]) if isinstance(row[6], str) else row[6]
+                        except Exception:
+                            strengths_list = []
+
+                    gaps_list = []
+                    if row[7]:
+                        try:
+                            gaps_list = json.loads(row[7]) if isinstance(row[7], str) else row[7]
+                        except Exception:
+                            gaps_list = []
+
+                    features_dict = {}
+                    if row[14]:
+                        try:
+                            features_dict = json.loads(row[14]) if isinstance(row[14], str) else row[14]
+                        except Exception:
+                            features_dict = {}
+
+                    records.append({
+                        "url": row[0],
+                        "company": row[1] or "Unknown Company",
+                        "title": row[2] or "Unknown Role",
+                        "platform": row[3] or "Indeed",
+                        "score": row[4] or 0,
+                        "reason": row[5] or "",
+                        "strengths": strengths_list,
+                        "gaps": gaps_list,
+                        "rag_score": row[8],
+                        "seniority": row[9],
+                        "skill_overlap": row[10],
+                        "eval_model": row[11],
+                        "prompt_version": row[12],
+                        "description": row[13] or "",
+                        "features_json": row[14] or "{}",
+                        "features": features_dict,
+                        "decision_reason": row[15] or "",
+                        "outcome_stage": row[16] or "discovered",
+                        "content_hash": row[17] or "",
+                        "dedup_key": row[18] or "",
+                        "is_stretch": features_dict.get("is_stretch", False),
+                        "penalties": features_dict.get("penalties", []),
+                        "stretch_signals": features_dict.get("stretch_signals", []),
+                    })
+        except Exception as e:
+            log_message(f"Error fetching pending approvals: {e}")
+    return records
+
 def export_applications_to_csv(export_path: str) -> bool:
     """Export SQLite applications table including AI evaluation results to CSV file."""
     with DB_LOCK:
@@ -640,6 +1164,6 @@ def get_recent_history_text(limit=10) -> str:
             return ""
 
 # Auto-initialize schema and perform migration check on module import
-_init_db_schema()
+_init_db_schema()          # also calls _run_schema_migrations() internally
 _migrate_csv_to_sqlite()
 APPLIED_URLS_SET = load_applied_urls()

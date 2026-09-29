@@ -18,6 +18,9 @@ class JobState:
     RESUME_UPLOADED  = "RESUME_UPLOADED"
     FIELDS_FILLED    = "FIELDS_FILLED"
     SUBMITTED        = "SUBMITTED"
+    INTERVIEW        = "INTERVIEW"
+    OFFER            = "OFFER"
+    REJECTED_POST    = "REJECTED_POST"
     FAILED           = "FAILED"
     NEEDS_RETRY      = "NEEDS_RETRY"
     REJECTED         = "REJECTED"
@@ -29,22 +32,56 @@ VALID_TRANSITIONS = {
     "FORM_OPENED":      ["RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
     "RESUME_UPLOADED":  ["FIELDS_FILLED", "FAILED"],
     "FIELDS_FILLED":    ["SUBMITTED", "NEEDS_RETRY", "FAILED"],
+    "SUBMITTED":        ["INTERVIEW", "OFFER", "REJECTED_POST", "Interview", "Offer", "Rejected", "REJECTED", "FAILED"],
+    "INTERVIEW":        ["OFFER", "REJECTED_POST", "Offer", "Rejected", "REJECTED", "FAILED"],
+    "Interview":        ["OFFER", "REJECTED_POST", "Offer", "Rejected", "REJECTED", "FAILED"],
+    "REJECTED_POST":    ["INTERVIEW", "OFFER", "FAILED"],
     "NEEDS_RETRY":      ["FORM_OPENED", "RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
     "FAILED":           ["NEEDS_RETRY", "FORM_OPENED"],
 }
 
 _ERROR_STATES = {"FAILED", "NEEDS_RETRY"}
-# Fix 1.6: Normalized to cover ALL status strings stored by AppStatus + FSM constants.
-# DB stores AppStatus strings ("Applied", "Rejected", etc.) and FSM constants ("SUBMITTED").
-# Both sets must be checked so is_job_completed() correctly blocks re-evaluation.
-_TERMINAL_STATES = {
+
+# Terminal states for re-application: once submitted/interviewing/offered, scraper should not re-evaluate
+_TERMINAL_REAPPLICATION_STATES = {
     # FSM constants
-    "SUBMITTED", "REJECTED",
+    "SUBMITTED", "INTERVIEW", "OFFER", "REJECTED_POST", "REJECTED",
     # AppStatus display strings (stored in SQLite)
     "Applied", "Rejected", "Withdrawn", "Offer", "Offer Received",
     "Interview", "Interviewing",
     # Bot runner states
-    "Manual Approval Apply", "SUBMITTED",
+    "Manual Approval Apply",
+}
+
+# Status vocabulary mapping between FSM constants and applications.status display strings
+FSM_TO_APP_STATUS = {
+    "DISCOVERED":       "Suggested",
+    "QUALIFIED":        "Suggested",
+    "APPROVED":         "Approval Needed",
+    "FORM_OPENED":      "Applying",
+    "RESUME_UPLOADED":  "Applying",
+    "FIELDS_FILLED":    "Applying",
+    "SUBMITTED":        "Applied",
+    "INTERVIEW":        "Interview",
+    "OFFER":            "Offer",
+    "REJECTED":         "Rejected",
+    "REJECTED_POST":    "Rejected",
+    "FAILED":           "Failed",
+    "NEEDS_RETRY":      "Needs Retry",
+}
+
+APP_STATUS_TO_FSM = {
+    "Suggested":             "QUALIFIED",
+    "Approval Needed":       "APPROVED",
+    "Applied":               "SUBMITTED",
+    "Manual Approval Apply": "SUBMITTED",
+    "Interview":             "INTERVIEW",
+    "Interviewing":          "INTERVIEW",
+    "Offer":                 "OFFER",
+    "Offer Received":        "OFFER",
+    "Rejected":              "REJECTED_POST",
+    "Withdrawn":             "REJECTED_POST",
+    "Skipped":               "REJECTED",
 }
 
 def can_transition(current: str, new_state: str) -> bool:
@@ -53,7 +90,12 @@ def can_transition(current: str, new_state: str) -> bool:
         return True
     if new_state in _ERROR_STATES:
         return True
-    return new_state in VALID_TRANSITIONS.get(current, [])
+    allowed = VALID_TRANSITIONS.get(current, [])
+    if not allowed and current.upper() in VALID_TRANSITIONS:
+        allowed = VALID_TRANSITIONS.get(current.upper(), [])
+    return (new_state in allowed or 
+            new_state.upper() in allowed or 
+            new_state.capitalize() in allowed)
 
 def transition(url: str, new_state: str, detail: str = ""):
     """
@@ -70,10 +112,27 @@ def get_job_state(url: str) -> str:
     """Return the current FSM state of a job URL from SQLite."""
     return db.get_state(url) or ""
 
+_TERMINAL_STATES = _TERMINAL_REAPPLICATION_STATES
+
+def sync_application_status(url: str, new_status: str, detail: str = ""):
+    """
+    Synchronize both FSM state and SQLite application status string.
+    Ensures that dashboard, status tracker, and FSM never diverge.
+    """
+    if new_status in APP_STATUS_TO_FSM:
+        fsm_state = APP_STATUS_TO_FSM[new_status]
+        app_status = new_status
+    else:
+        fsm_state = new_status.upper()
+        app_status = FSM_TO_APP_STATUS.get(fsm_state, new_status)
+
+    transition(url, fsm_state, detail=detail)
+    db.update_job_status_in_csv(url, "", app_status, detail)
+
 def is_job_completed(url: str) -> bool:
-    """Check if a job was already submitted or in terminal state."""
+    """Check if a job was already submitted or in terminal application state (blocks scraper re-evaluation)."""
     state = get_job_state(url)
-    return state in _TERMINAL_STATES
+    return state in _TERMINAL_REAPPLICATION_STATES
 
 def get_resume_checkpoint(url: str) -> str:
     """

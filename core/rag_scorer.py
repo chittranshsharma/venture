@@ -81,15 +81,15 @@ def _parse_lines_with_weights(resume_text: str):
     return result
 
 
-def get_top_k_bullets(resume_text: str, job_description: str, k: int = 5) -> list[str]:
-    """Return the k resume lines most semantically similar to the target JD."""
+def get_top_k_bullets_and_score(resume_text: str, job_description: str, k: int = 5) -> tuple[list[str], float]:
+    """Return the k resume lines most semantically similar to the target JD along with the RAG cosine score."""
     if not resume_text or not resume_text.strip():
-        return ["Candidate experienced in software development, architecture, and engineering."]
+        return (["Candidate experienced in software development, architecture, and engineering."], 0.5)
 
     model = get_model()
     if model is None:
         lines = [l.strip() for l in resume_text.split('\n') if len(l.strip()) > 20]
-        return lines[:k] if lines else [resume_text[:500]]
+        return (lines[:k] if lines else [resume_text[:500]], 0.5)
 
     # Feature 4.3 — cache embeddings per unique resume content
     resume_hash = hashlib.md5(resume_text.encode('utf-8', errors='ignore')).hexdigest()
@@ -98,7 +98,7 @@ def get_top_k_bullets(resume_text: str, job_description: str, k: int = 5) -> lis
     else:
         parsed = _parse_lines_with_weights(resume_text)
         if not parsed:
-            return [resume_text[:500]]
+            return ([resume_text[:500]], 0.5)
         lines = [p[0] for p in parsed]
         weights = np.array([p[1] for p in parsed], dtype=np.float32)
         try:
@@ -106,7 +106,7 @@ def get_top_k_bullets(resume_text: str, job_description: str, k: int = 5) -> lis
             _resume_cache[resume_hash] = (lines, line_vecs, weights)
         except Exception as e:
             logger.warning(f"Resume embedding error: {e}")
-            return lines[:k]
+            return (lines[:k], 0.5)
 
     try:
         # Fix 1.2 — use up to 3000 chars of the JD (skills usually appear mid-document)
@@ -124,12 +124,22 @@ def get_top_k_bullets(resume_text: str, job_description: str, k: int = 5) -> lis
             norm_jd = 1e-10
         jd_vec = jd_vec / norm_jd
 
+        raw_sim = normed_vecs @ jd_vec
         # Upgrade 2.4 — weight scores by section relevance before ranking
-        scores = (normed_vecs @ jd_vec) * weights
+        scores = raw_sim * weights
 
         top_k = min(k, len(lines))
         top_idx = np.argsort(scores)[-top_k:][::-1]
-        return [lines[i] for i in top_idx]
+        bullets = [lines[i] for i in top_idx]
+        avg_top_sim = float(np.clip(np.mean(raw_sim[top_idx]), 0.0, 1.0)) if len(top_idx) > 0 else 0.5
+        return (bullets, round(avg_top_sim, 4))
     except Exception as e:
         logger.warning(f"RAG ranking fallback: {e}")
-        return lines[:k]
+        return (lines[:k], 0.5)
+
+
+def get_top_k_bullets(resume_text: str, job_description: str, k: int = 5) -> list[str]:
+    """Return the k resume lines most semantically similar to the target JD."""
+    bullets, _ = get_top_k_bullets_and_score(resume_text, job_description, k=k)
+    return bullets
+
