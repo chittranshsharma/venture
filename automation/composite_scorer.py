@@ -25,6 +25,20 @@ NEG_TITLE = re.compile(
     re.I
 )
 
+ENGLISH_STOPWORDS = {
+    "the", "and", "is", "in", "to", "with", "for", "of", "on", "at", "as",
+    "this", "that", "from", "or", "an", "by", "be", "are", "we", "you", "our"
+}
+
+
+def is_english_jd(text: str) -> bool:
+    """Fast check whether job description is in English to avoid false low-RAG rejections."""
+    tokens = re.findall(r"\b[a-z]{2,}\b", (text or "").lower())
+    if len(tokens) < 25:
+        return True
+    stop_count = sum(1 for t in tokens if t in ENGLISH_STOPWORDS)
+    return (stop_count / len(tokens)) >= 0.07
+
 
 @dataclass
 class EvaluationSignals:
@@ -208,11 +222,13 @@ def evaluate_opportunity(
 
     final_score = int(round(max(0.0, min(100.0, base_score + net_adj))))
 
+    is_non_eng = not is_english_jd(jd_text)
+
     # 7. Tri-State Routing (Low, Uncertain/Stretch, High Fit)
     if final_score >= min_score:
         route = "queue"
         propensity = 1.0
-    elif final_score >= 50 or (is_stretch and final_score >= 40):
+    elif final_score >= 48 or (is_stretch and final_score >= 38) or is_non_eng:
         route = "explore"
         propensity = 0.5
     else:

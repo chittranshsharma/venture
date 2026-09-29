@@ -114,8 +114,8 @@ def evaluate_constraints(title: str, text: str, cfg: Dict[str, Any]) -> Constrai
         min_yoe = min(valid_yoes)
         if min_yoe > cand_yoe:
             yoe_diff = min_yoe - cand_yoe
-            # Scale penalty: 5 pts per missing year, capped at 25 pts
-            pen_val = min(25.0, round(yoe_diff * 5.0, 1))
+            # Moderate penalty: 2.5 pts per missing year, capped at 10.0 pts so stretch roles aren't falsely rejected
+            pen_val = min(10.0, round(yoe_diff * 2.5, 1))
             penalties.append(Penalty(
                 type="YOE_GAP",
                 value=pen_val,

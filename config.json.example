@@ -47,7 +47,12 @@
         "location_type": "All",
         "location_scope": "Entire Country",
         "preferred_locations": ["Mumbai, Maharashtra, India", "Bangalore, Karnataka, India"],
-        "target_platforms": ["Indeed", "Naukri", "LinkedIn"]
+        "target_platforms": ["Indeed", "Naukri", "LinkedIn"],
+        "safe_mode": true,
+        "dry_run_mode": true,
+        "daily_apply_cap": 10,
+        "min_delay_seconds": 15,
+        "max_delay_seconds": 45
     },
     "accounts": {
         "indeed_email": "",

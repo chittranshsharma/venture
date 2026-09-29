@@ -78,7 +78,8 @@ def process_job(
         cfg = CONFIG or load_config()
 
     title = (job.get("title") or "Unknown Role").strip()
-    company = (job.get("company") or "Unknown Company").strip()
+    raw_comp = str(job.get("company") or "").strip()
+    company = "" if raw_comp.lower() in ("nan", "none", "null", "undefined") else raw_comp
     url = (job.get("url") or "").strip()
     desc_text = (job.get("description") or job.get("jd_text") or "").strip()
     platform = job.get("platform") or "Web"
