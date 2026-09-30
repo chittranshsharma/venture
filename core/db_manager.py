@@ -66,14 +66,15 @@ def jd_similarity(a: str, b: str) -> float:
         return 0.0
     return len(A & B) / max(len(A | B), 1)
 
-BLOCK_REASONS = {"not_fit", "company", "seniority", "duplicate"}  # not location/unsure/other
+NO_SUPPRESS_REASONS = {"location"}  # only location-based rejects allow reposts
+BLOCK_REASONS = {"not_fit", "company", "seniority", "duplicate", "unsure", "other"}  # backward-compat
 
 def suppression_verdict(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90) -> str:
     """
     Determine dedup suppression verdict: 'suppress' | 'flag' | 'pass'.
     - suppress: High confidence duplicate (similarity >= 0.85).
     - flag: Moderate match (0.5 <= sim < 0.85) or text too short (<200 chars) to reliably distinguish.
-    - pass: Distinct job, or past rejection was due to soft reasons like location/unsure.
+    - pass: Distinct job, or past rejection was due to location constraints (NO_SUPPRESS_REASONS).
     Supports calling with or without explicit connection:
       suppression_verdict(conn, company, title, jd_text, window_days)
       suppression_verdict(company, title, jd_text, window_days)
@@ -110,8 +111,8 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
             (key, cutoff, key, cutoff, cutoff_space)).fetchall()
         verdict = "pass"
         for prior, kind, reason in rows:
-            if kind == "rejected" and reason not in BLOCK_REASONS:
-                continue                      # location/unsure reject must not hide other cities
+            if kind == "rejected" and reason in NO_SUPPRESS_REASONS:
+                continue                      # only location-based rejects allow reposts
             prior = prior or ""
             if len(prior) < 200 or len(jd_text or "") < 200:
                 s = 0.7                       # too short to compare: flag, do not pass

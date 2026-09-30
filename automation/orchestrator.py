@@ -292,14 +292,38 @@ def process_job(
                 package_path=pkg.package_dir if pkg else None
             )
 
-    db.log_message(f"📦 [{tag}] ({score}%): Opportunity prepared and awaiting review in Approvals.")
+    # Safety Invariant: Only route 'queue' with verdict 'pass' may skip human approval,
+    # and ONLY when safe_mode=False AND dry_run_mode=False (and require_approval=False) set explicitly.
+    settings = cfg.get("settings", {})
+    safe_mode = settings.get("safe_mode", True)
+    dry_run_mode = settings.get("dry_run_mode", True)
+    require_approval = settings.get("require_approval", True)
+
+    can_auto_approve = (
+        safe_mode is False
+        and dry_run_mode is False
+        and require_approval is False
+        and routing == "queue"
+        and verdict == "pass"
+        and getattr(signals, "language", "en") == "en"
+        and not signals.is_stretch
+        and score >= 85
+    )
+
+    final_state = JobState.READY_FOR_APPROVAL
+    chk = "ready_for_approval"
+    if can_auto_approve:
+        if url and not dry_run:
+            transition(url, JobState.APPROVED, checkpoint="auto_approved")
+        final_state = JobState.APPROVED
+        chk = "auto_approved"
 
     return JobLifecycleResult(
         url=url, title=title, company=company,
-        state=JobState.READY_FOR_APPROVAL, score=score,
+        state=final_state, score=score,
         route=routing, is_stretch=signals.is_stretch,
         rejection_reason=None, package=pkg.to_dict() if pkg else None,
-        decision_reason=decision_reason, checkpoint="ready_for_approval",
+        decision_reason=decision_reason, checkpoint=chk,
         telemetry=features
     )
 
@@ -344,7 +368,14 @@ async def execute_ats_submission(
             f"cannot be submitted without explicit human approval click."
         )
 
-    # Invariant 3: Daily Apply Cap enforced from DB count before execution
+    # Invariant 3: Suppressed duplicate jobs must never be submitted
+    desc = job.get("jd_text") or job.get("description", "")
+    if db.suppression_verdict(None, company, title, desc) == "suppress":
+        raise AssertionError(
+            f"Security Invariant Violated: Submission attempted on suppressed duplicate job '{title}' @ '{company}'."
+        )
+
+    # Invariant 4: Daily Apply Cap enforced from DB count before execution
     settings = CONFIG.get("settings", {})
     daily_cap = settings.get("daily_apply_cap", 25)
     today_applied = db.get_daily_apply_count()

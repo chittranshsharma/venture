@@ -52,7 +52,7 @@ def collect_jds_cycle(max_per_query=20):
                         total_skipped += 1
                         continue
 
-                    dk = compute_dedup_key(company, title, loc)
+                    dk = compute_dedup_key(company, title)
                     ch = compute_content_hash(desc)
 
                     log_evaluation(

@@ -417,3 +417,139 @@ def test_blocked_job_restore_reaches_approvals_queue(clean_db):
         assert app_row is not None, "Restored application must now exist in applications table"
         assert app_row[0] in ("Approval Needed", "Suggested", "Applied")
 
+
+def test_reject_reason_unsure_and_other_suppresses(clean_db):
+    """
+    Rejections with reasons 'unsure' or 'other' (denylist check) MUST suppress reposts.
+    Only 'location' allows reposts in another city.
+    """
+    company = "CloudScale Inc"
+    title = "Backend Engineer"
+    body = (
+        "CloudScale Inc is looking for a Backend Engineer proficient in Python and Go to build high throughput "
+        "distributed caching services, database connection poolers, and low-latency API gateways. "
+        "Candidate must demonstrate extensive experience in asynchronous networking, microservices resilience, "
+        "Kubernetes orchestration, Redis clustering, and automated testing with pytest and mock frameworks. "
+        "Daily responsibilities include optimizing SQL queries on PostgreSQL, monitoring telemetry in Prometheus, "
+        "and performing code reviews with the engineering platform team."
+    )
+    # 1. Test 'unsure'
+    url_1 = "https://jobs.lever.co/cloudscale/1"
+    db.log_evaluation(url=url_1, title=title, company=company, jd_text=f"{body} City: Austin, TX", route="queue")
+    db.log_approval_decision(url=url_1, label="reject", reject_reason="unsure", score=60, propensity=1.0)
+
+    jd_2 = f"{body} City: Seattle, WA"
+    verdict_unsure = db.suppression_verdict(company, title, jd_2)
+    assert verdict_unsure == "suppress", f"unsure reject must suppress duplicate repost; got {verdict_unsure}"
+
+    # 2. Test 'other'
+    company_other = "DataPeak Corp"
+    url_other = "https://jobs.lever.co/datapeak/1"
+    db.log_evaluation(url=url_other, title=title, company=company_other, jd_text=f"{body} City: Boston, MA", route="queue")
+    db.log_approval_decision(url=url_other, label="reject", reject_reason="other", score=50, propensity=1.0)
+
+    verdict_other = db.suppression_verdict(company_other, title, f"{body} City: Denver, CO")
+    assert verdict_other == "suppress", f"other reject must suppress duplicate repost; got {verdict_other}"
+
+
+def test_flag_never_auto_applies(clean_db):
+    """
+    Jobs with verdict 'flag', route 'explore', or non-English language MUST NEVER
+    skip human approval, even when safe_mode=False and dry_run_mode=False.
+    Only route 'queue' with verdict 'pass', English, and explicit non-safe settings may auto-approve.
+    """
+    from automation.orchestrator import process_job
+
+    cfg = {"settings": {"safe_mode": False, "dry_run_mode": False, "require_approval": False}}
+
+    # Case A: Short JD triggering 'flag' verdict (<200 chars)
+    # Seed a prior applied job
+    prior_url = "https://boards.greenhouse.io/flagtest/1"
+    db.save_to_db(
+        url=prior_url, title="Senior Python Engineer", company="FlagCorp",
+        platform="Greenhouse", status="Applied", score=90,
+        jd_text="Python FastAPI backend developer."
+    )
+    job_flag = {
+        "url": "https://boards.greenhouse.io/flagtest/2",
+        "title": "Senior Python Engineer",
+        "company": "FlagCorp",
+        "platform": "Greenhouse",
+        "jd_text": "Python FastAPI backend developer."  # <200 chars -> verdict 'flag'
+    }
+    res_flag = process_job(job_flag, cfg=cfg, dry_run=False)
+    assert res_flag.state in (JobState.READY_FOR_APPROVAL, JobState.EVALUATED), (
+        f"Flagged jobs must never auto-apply; expected READY_FOR_APPROVAL/EVALUATED, got {res_flag.state}"
+    )
+
+    # Case B: Explore route job
+    job_explore = {
+        "url": "https://boards.greenhouse.io/exploretest/1",
+        "title": "Staff Cloud Systems Architect",
+        "company": "ExploreCorp",
+        "platform": "Greenhouse",
+        "jd_text": (
+            "ExploreCorp is hiring a Staff Cloud Systems Architect with extensive experience designing "
+            "multi-cloud architectures, Kubernetes clusters, terraform modules, and distributed consensus algorithms. "
+            "Looking for strong leadership and technical expertise across AWS, GCP, and Azure datacenters."
+        )
+    }
+    # min_score=95 forces this to explore route (score will be ~75-80, within 20 pt exploration band)
+    cfg_explore = {"settings": {"safe_mode": False, "dry_run_mode": False, "require_approval": False, "min_score": 95}}
+    res_explore = process_job(job_explore, cfg=cfg_explore, dry_run=False)
+    if res_explore.route == "explore":
+        assert res_explore.state in (JobState.READY_FOR_APPROVAL, JobState.EVALUATED), (
+            f"Explore route jobs must never auto-apply; got {res_explore.state}"
+        )
+
+    # Case C: Non-English job
+    job_german = {
+        "url": "https://boards.greenhouse.io/germantest/1",
+        "title": "Senior Software Entwickler",
+        "company": "BerlinTech",
+        "platform": "Greenhouse",
+        "jd_text": (
+            "Wir suchen einen erfahrenen Senior Software Entwickler für unsere Backend-Systeme in Berlin. "
+            "Sie entwickeln hochverfügbare Microservices mit Python, FastAPI, Docker und PostgreSQL. "
+            "Erforderlich sind mindestens fünf Jahre Erfahrung in der Softwareentwicklung und agile Methoden."
+        )
+    }
+    res_german = process_job(job_german, cfg=cfg, dry_run=False)
+    assert res_german.state in (JobState.READY_FOR_APPROVAL, JobState.EVALUATED), (
+        f"Non-English jobs must never auto-apply; got {res_german.state}"
+    )
+
+
+def test_apply_single_job_async_on_suppressed_job_aborts(clean_db):
+    """
+    Calling apply_single_job_async on a job that matches a suppressed application
+    must immediately return False and abort without invoking ATS submission.
+    """
+    from automation.bot_runner import apply_single_job_async
+
+    company = "Apollo Technologies"
+    title = "Site Reliability Engineer"
+    jd = (
+        "Apollo Technologies is looking for a Site Reliability Engineer to manage Kubernetes clusters, "
+        "maintain high system uptime, implement automated observability with Datadog and OpenTelemetry, "
+        "and collaborate with software engineering teams to debug complex production incidents."
+    )
+    # 1. Seed prior applied record
+    url_applied = "https://boards.greenhouse.io/apollo/sre-1"
+    db.save_to_db(
+        url=url_applied, title=title, company=company, platform="Greenhouse",
+        status="Applied", score=88, jd_text=jd
+    )
+
+    # 2. Attempt to apply to duplicate
+    job_dup = {
+        "url": "https://boards.greenhouse.io/apollo/sre-2",
+        "title": title,
+        "company": company,
+        "platform": "Greenhouse",
+        "jd_text": jd,
+    }
+    applied = apply_single_job_async(job_dup)
+    assert applied is False, "apply_single_job_async must abort on suppressed job"
+
+
