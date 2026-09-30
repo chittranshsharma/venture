@@ -54,7 +54,7 @@ class ApprovalsView(ctk.CTkFrame):
         self._mode_seg = ctk.CTkSegmentedButton(
             left_card, values=["Queue", "Archived"],
             command=self._on_mode_change,
-            selected_color=C["accent"], selected_hover_color=C["accent_hover"],
+            selected_color=C["accent"], selected_hover_color=C.get("accent_hover", C.get("accent_h", "#C4BEB2")),
             font=F["xs_b"]
         )
         self._mode_seg.set("Queue")

@@ -27,6 +27,7 @@ C = {
     "primary_p":        "#D6D0C4",
     "accent":           "#D6D0C4",
     "accent_h":         "#C4BEB2",
+    "accent_hover":     "#C4BEB2",
     "accent_d":         "#B0AAA0",
     "text":             "#E8E5DE",
     "ink":              "#E8E5DE",

@@ -1,9 +1,15 @@
 import os
+import re
 import json
 import sqlite3
 import random
 import sys
 from pathlib import Path
+
+WORKSPACE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if WORKSPACE_DIR not in sys.path:
+    sys.path.insert(0, WORKSPACE_DIR)
+
 from eval.common import get_dedup_key, truncate_jd
 
 DB = "venture.db"
