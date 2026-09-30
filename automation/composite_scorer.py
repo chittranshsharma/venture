@@ -20,6 +20,10 @@ POS_TITLE = re.compile(
     r"\b(full[- ]?stack|backend|back[- ]end|python|react|node|software (engineer|developer)|web developer)\b",
     re.I
 )
+QA_BLOCK = re.compile(
+    r"\b(qa|sdet|quality assurance|test engineer|software tester|performance test(ing)?)\b",
+    re.I
+)
 NEG_TITLE = re.compile(
     r"\b(test|qa|quality assurance|sdet|support|sales|recruit|manager|consultant|analyst|designer|devops|sap|salesforce|mainframe)\b",
     re.I
@@ -127,6 +131,36 @@ def evaluate_opportunity(
     """
     if cfg is None:
         cfg = CONFIG or load_config()
+
+    # 0. Narrow Title Hard Block (QA/SDET/Test Engineer only, zero false-rejects)
+    if QA_BLOCK.search(title or ""):
+        return EvaluationSignals(
+            title=title,
+            company=company,
+            jd_text=jd_text,
+            deterministic_score=0,
+            raw_probability=0.0,
+            rag_score=0.0,
+            top_bullets=[],
+            title_clean=-1.0,
+            title_pos=0.0,
+            title_neg=1.0,
+            title_sim_max=0.0,
+            jd_coverage=0.0,
+            cand_coverage=0.0,
+            matched_skills=[],
+            missing_skills=[],
+            hard_block=True,
+            hard_reason="qa_test_title",
+            penalties=[],
+            stretch_signals=[],
+            total_penalty=0.0,
+            total_stretch_boost=0.0,
+            net_adjustment=0.0,
+            is_stretch=False,
+            route="blocked_title",
+            propensity=0.0,
+        )
 
     # 1. Tier 1 Invariants: Hard Blocks
     c_res: ConstraintResult = evaluate_constraints(title, jd_text, cfg)

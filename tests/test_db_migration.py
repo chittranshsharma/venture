@@ -64,15 +64,15 @@ def _init_base_schema(conn):
     conn.commit()
 
 
-def test_fresh_database_migration_v4(isolated_db):
-    """A fresh DB should migrate sequentially to user_version = 4 with all tables, columns, and indexes."""
+def test_fresh_database_migration_full(isolated_db):
+    """A fresh DB should migrate sequentially to user_version = 7 with all tables, columns, and indexes."""
     conn = sqlite3.connect(isolated_db)
     try:
         _init_base_schema(conn)
         _run_schema_migrations_locked(conn)
 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 6, "user_version must be 6 after full migration"
+        assert version == 7, "user_version must be 7 after full migration"
 
         # Check applications columns
         app_cols = [r[1] for r in conn.execute("PRAGMA table_info(applications)").fetchall()]
@@ -264,3 +264,93 @@ def test_prompt_version_derivation():
     assert len(v2) == 8
     assert v1 != v2
     assert v1 == prompt_version(t1), "prompt_version must be deterministic for identical template"
+ 
+ 
+def test_migration_v7_location_free_dedup_key(isolated_db):
+    """
+    On a database with legacy location-keyed rows (same job in 2 cities had different keys),
+    running migration v7 updates both rows to share the exact same canonical dedup_key.
+    """
+    conn = sqlite3.connect(isolated_db)
+    _init_base_schema(conn)
+    _run_schema_migrations_locked(conn)  # Migrates to latest v7
+    
+    # Simulate legacy state: artificially set location-based keys and revert version to 6
+    conn.execute("PRAGMA user_version = 6")
+    legacy_key_ny = "legacy_key_ny123"
+    legacy_key_sf = "legacy_key_sf456"
+    
+    conn.execute("""
+        INSERT INTO applications (url, company, title, dedup_key, status)
+        VALUES ('https://example.com/job/ny', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'Applied')
+    """, (legacy_key_ny,))
+    conn.execute("""
+        INSERT INTO applications (url, company, title, dedup_key, status)
+        VALUES ('https://example.com/job/sf', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'Applied')
+    """, (legacy_key_sf,))
+    
+    conn.execute("""
+        INSERT INTO evaluations (url, company, title, dedup_key, route)
+        VALUES ('https://example.com/eval/ny', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'queue')
+    """, (legacy_key_ny,))
+    conn.execute("""
+        INSERT INTO evaluations (url, company, title, dedup_key, route)
+        VALUES ('https://example.com/eval/sf', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'queue')
+    """, (legacy_key_sf,))
+    conn.commit()
+    
+    # Run migration v7
+    _run_schema_migrations_locked(conn)
+    
+    v = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert v == 7
+    
+    app_keys = [r[0] for r in conn.execute("SELECT dedup_key FROM applications WHERE company='NovaTech Solutions'").fetchall()]
+    assert len(app_keys) == 2
+    assert app_keys[0] == app_keys[1], "Both city applications must now share the exact same canonical dedup_key"
+    assert app_keys[0] == compute_dedup_key("NovaTech Solutions", "Full Stack Engineer")
+    
+    eval_keys = [r[0] for r in conn.execute("SELECT dedup_key FROM evaluations WHERE company='NovaTech Solutions'").fetchall()]
+    assert len(eval_keys) == 2
+    assert eval_keys[0] == eval_keys[1], "Both city evaluations must now share the exact same canonical dedup_key"
+    assert eval_keys[0] == compute_dedup_key("NovaTech Solutions", "Full Stack Engineer")
+    conn.close()
+
+
+@pytest.mark.parametrize("start_version", [1, 2, 3, 4, 5, 6])
+def test_upgrade_from_intermediate_version_to_v7(isolated_db, start_version):
+    """Migrating from any intermediate user_version 1..6 must successfully reach v7."""
+    conn = sqlite3.connect(isolated_db)
+    _init_base_schema(conn)
+    _run_schema_migrations_locked(conn)  # Migrates to latest v7
+    
+    # Artificially set user_version to start_version
+    conn.execute(f"PRAGMA user_version = {start_version}")
+    conn.commit()
+
+    # Re-run migration
+    _run_schema_migrations_locked(conn)
+    final_v = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert final_v == 7, f"Migration from version {start_version} must reach user_version 7"
+    conn.close()
+
+
+def test_migration_failure_preserves_user_version(isolated_db):
+    """If an unrecoverable SQL error occurs during a migration block, user_version remains unchanged."""
+    conn = sqlite3.connect(isolated_db)
+    _init_base_schema(conn)
+    _run_schema_migrations_locked(conn)
+    
+    # Set to version 6
+    conn.execute("PRAGMA user_version = 6")
+    conn.commit()
+
+    # Drop evaluations table so v7 migration fails when selecting from it
+    conn.execute("DROP TABLE evaluations")
+    conn.commit()
+
+    # Run migrations; error will be logged and user_version must remain 6
+    _run_schema_migrations_locked(conn)
+    v_after = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert v_after == 6, f"Failed migration must not advance user_version (remains {v_after})"
+    conn.close()

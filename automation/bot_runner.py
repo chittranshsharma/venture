@@ -285,11 +285,23 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
         from core.notifier import notify
         notify("JobPilot — Strong Match", f"{title} at {company} ({score}%)")
 
-    require_approval = CONFIG.get("settings", {}).get("require_approval", True)
-    if require_approval or result.is_stretch or score < 85:
+    settings = CONFIG.get("settings", {})
+    safe_mode = settings.get("safe_mode", True)
+    dry_run_mode = settings.get("dry_run_mode", True)
+    require_approval = settings.get("require_approval", True)
+
+    can_auto_approve = (
+        safe_mode is False
+        and dry_run_mode is False
+        and require_approval is False
+        and result.route == "queue"
+        and not result.is_stretch
+        and score >= 85
+    )
+    if not can_auto_approve:
         return True
 
-    # Auto-apply opt-in path (only if require_approval is False and score >= 85 and not stretch)
+    # Auto-apply opt-in path (only if safe_mode=False, dry_run=False, require_approval=False, route=queue, and score >= 85)
     try:
         transition(href, JobState.APPROVED)
     except Exception:
@@ -971,7 +983,18 @@ def stop_bot():
     log_message("Stop command triggered.")
 
 def apply_single_job_async(job):
+    from core.db_manager import suppression_verdict
+    company = job.get("company", "")
+    title = job.get("title", "")
+    jd_text = job.get("jd_text") or job.get("description", "")
+    if suppression_verdict(None, company, title, jd_text) == "suppress":
+        log_message(f"🚫 [SUPPRESSED] Refusing to apply to {company} - '{title}': recent application or rejection within 90 days.")
+        return False
+
     async def process_apply_page(page, job):
+        if suppression_verdict(None, company, title, jd_text) == "suppress":
+            log_message(f"🚫 [SUPPRESSED] Refusing to apply to {company} - '{title}': recent application or rejection within 90 days.")
+            return False
         log_message(f"APPLYING APPROVED JOB: {job['title']} at {job['company']}")
         url = job.get("url", "")
 

@@ -497,6 +497,15 @@ class SuggestionsView(ctk.CTkFrame):
         url = job.get("url", "")
         score = job.get("score", 70)
 
+        from core.db_manager import suppression_verdict
+        verdict = suppression_verdict(None, company, role, job.get("description", ""))
+        if verdict == "suppress":
+            messagebox.showwarning(
+                "Suppressed Opportunity",
+                f"'{role}' at '{company}' was already applied or rejected within 90 days.\n\nSuppressed to prevent duplicate applications."
+            )
+            return
+
         with state.DOUBT_LOCK:
             # Prevent duplicate queue entries
             existing_urls = [d.get("url") for d in state.DOUBT_QUEUE]

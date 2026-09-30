@@ -7,7 +7,7 @@ import threading
 import re
 import hashlib
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 import core.state as state
 
 def normalize_jd(t: str) -> str:
@@ -42,12 +42,130 @@ def normalize_location(loc: str) -> str:
     return re.sub(r"[^a-z0-9]", "", loc)
 
 def compute_dedup_key(company: str, title: str, location: str = "") -> str:
-    """Canonical cross-platform job key: sha256(norm_company|norm_title|norm_loc)[:16]."""
+    """
+    Canonical cross-platform job key: sha256(norm_company|norm_title)[:16].
+    Location is deliberately omitted so multi-location postings of the same role
+    at the same company share an identical dedup key.
+    """
     norm_c = normalize_company(company)
     norm_t = re.sub(r'[^a-z0-9]', '', (title or "").lower())
-    norm_l = normalize_location(location)
-    raw = f"{norm_c}|{norm_t}|{norm_l}"
+    raw = f"{norm_c}|{norm_t}"
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]
+
+def _shingles(text: str, n: int = 5) -> set:
+    """Extract n-word shingles from normalized JD text for Jaccard similarity."""
+    w = re.findall(r"[a-z0-9+#.]+", normalize_jd(text))
+    if not w:
+        return set()
+    return {" ".join(w[i:i+n]) for i in range(max(len(w) - n + 1, 1))}
+
+def jd_similarity(a: str, b: str) -> float:
+    """Jaccard similarity between two texts based on word shingles."""
+    A, B = _shingles(a), _shingles(b)
+    if not A or not B:
+        return 0.0
+    return len(A & B) / max(len(A | B), 1)
+
+NO_SUPPRESS_REASONS = {"location"}  # only location-based rejects allow reposts
+BLOCK_REASONS = {"not_fit", "company", "seniority", "duplicate", "unsure", "other"}  # backward-compat
+
+def suppression_verdict(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90) -> str:
+    """
+    Determine dedup suppression verdict: 'suppress' | 'flag' | 'pass'.
+    - suppress: High confidence duplicate (similarity >= 0.85).
+    - flag: Moderate match (0.5 <= sim < 0.85) or text too short (<200 chars) to reliably distinguish.
+    - pass: Distinct job, or past rejection was due to location constraints (NO_SUPPRESS_REASONS).
+    Supports calling with or without explicit connection:
+      suppression_verdict(conn, company, title, jd_text, window_days)
+      suppression_verdict(company, title, jd_text, window_days)
+    """
+    if isinstance(conn, str):
+        c = conn
+        t = company or ""
+        jd = title or ""
+        w_days = jd_text if isinstance(jd_text, int) else window_days
+        try:
+            with _get_connection() as direct_conn:
+                return suppression_verdict(direct_conn, c, t, jd, window_days=w_days)
+        except Exception:
+            return "pass"
+
+    if conn is None:
+        try:
+            with _get_connection() as direct_conn:
+                return suppression_verdict(direct_conn, company or "", title or "", jd_text or "", window_days=window_days)
+        except Exception:
+            return "pass"
+
+    key = compute_dedup_key(company or "", title or "")
+    cutoff = (datetime.now() - timedelta(days=window_days)).isoformat()
+    cutoff_space = cutoff.replace("T", " ")
+    try:
+        rows = conn.execute("""
+            SELECT jd_text, 'applied', NULL FROM applications
+              WHERE dedup_key=? AND applied_at >= ?
+            UNION ALL
+            SELECT e.jd_text, 'rejected', d.reject_reason FROM decisions d
+              JOIN evaluations e ON e.url = d.url
+              WHERE e.dedup_key=? AND d.label='reject' AND (d.decided_at >= ? OR d.decided_at >= ?)""",
+            (key, cutoff, key, cutoff, cutoff_space)).fetchall()
+        verdict = "pass"
+        for prior, kind, reason in rows:
+            if kind == "rejected" and reason in NO_SUPPRESS_REASONS:
+                continue                      # only location-based rejects allow reposts
+            prior = prior or ""
+            if len(prior) < 200 or len(jd_text or "") < 200:
+                s = 0.7                       # too short to compare: flag, do not pass
+            else:
+                s = jd_similarity(jd_text or "", prior)
+            if s >= 0.85:
+                return "suppress"
+            if s >= 0.5:
+                verdict = "flag"
+        return verdict
+    except Exception:
+        return "pass"
+
+def is_suppressed(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90, sim: float = 0.85) -> bool:
+    """Convenience boolean check: True if suppression_verdict is 'suppress'."""
+    return suppression_verdict(conn, company, title, jd_text, window_days=window_days) == "suppress"
+
+def is_application_suppressed(company: str, title: str, content_hash: str | None = None, window_days: int = 90, jd_text: str = "") -> bool:
+    """Backward-compatible suppression check delegating to suppression_verdict."""
+    return is_suppressed(None, company, title, jd_text, window_days=window_days)
+
+def get_archived_evaluations() -> list:
+    """Retrieve all blocked opportunities from evaluations table (route='blocked_title')."""
+    try:
+        with _get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT id, url, title, company, jd_text, route, decision_reason, evaluated_at
+                FROM evaluations
+                WHERE route = 'blocked_title'
+                ORDER BY evaluated_at DESC
+            """).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        log_message(f"Error fetching archived evaluations: {e}")
+        return []
+
+def restore_archived_job(url: str, cfg: dict = None):
+    """Restore a blocked title from evaluations and re-process with skip_title_block=True."""
+    with _get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM evaluations WHERE url = ? AND route = 'blocked_title'", (url,)).fetchone()
+        if not row:
+            return None
+        job = {
+            "url": row["url"],
+            "title": row["title"],
+            "company": row["company"],
+            "jd_text": row["jd_text"],
+            "platform": "Restored Archive",
+        }
+    from automation.orchestrator import process_job
+    return process_job(job, cfg=cfg, dry_run=False, skip_title_block=True)
 
 def compute_content_hash(text: str) -> str:
     """Normalized JD content hash to detect genuine revisions, ignoring dynamic scrape artifacts."""
@@ -395,6 +513,16 @@ def _run_schema_migrations_locked(conn):
             conn.execute("PRAGMA user_version = 6")
             conn.commit()
             print("[DB Migration] Schema migrated to version 6 (Application Packaging & Checkpointing).")
+
+        if v < 7:
+            for tbl in ("applications", "evaluations"):
+                for id_, c, t in conn.execute(f"SELECT id, company, title FROM {tbl}").fetchall():
+                    conn.execute(f"UPDATE {tbl} SET dedup_key=? WHERE id=?",
+                                 (compute_dedup_key(c or "", t or ""), id_))
+
+            conn.execute("PRAGMA user_version = 7")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 7 (Canonical location-free dedup_key backfill).")
     except Exception as e:
         print(f"[DB Migration] Error running migrations: {e}")
 
@@ -1085,7 +1213,7 @@ def recalculate_metrics_unlocked():
                 status_str = status or ""
                 if status_str in [AppStatus.APPLIED, "Manual Approval Apply", "SUBMITTED"]:
                     applied += count
-                elif status_str in [AppStatus.REJECTED, "Skipped", "Manual User Disapproval", AppStatus.WITHDRAWN, "FAILED"]:
+                elif status_str in [AppStatus.REJECTED, "Skipped", "Manual User Disapproval", AppStatus.WITHDRAWN, "FAILED", "Auto-Archived"]:
                     skipped += count
                 elif status_str == "Suggested":
                     suggested += count

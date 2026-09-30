@@ -69,6 +69,7 @@ def process_job(
     cfg: Optional[Dict[str, Any]] = None,
     dry_run: Optional[bool] = None,
     auto_prepare: bool = True,
+    skip_title_block: bool = False,
 ) -> JobLifecycleResult:
     """
     Authoritative single-entrypoint for processing an opportunity across all stages.
@@ -105,43 +106,65 @@ def process_job(
             checkpoint=chk, telemetry={"dedup_key": dk, "content_hash": ch}
         )
 
-    # Initial state transition: DISCOVERED
-    if url and not dry_run:
-        transition(url, JobState.DISCOVERED, checkpoint="discovered", detail=f"Discovered via {platform}")
+    verdict = db.suppression_verdict(None, company, title, desc_text)
+    if verdict == "suppress":
+        db.log_message(f"Dedup Suppression: Job '{title}' at '{company}' already applied or rejected within 90 days.")
+        return JobLifecycleResult(
+            url=url, title=title, company=company, state=JobState.REJECTED,
+            score=0, route="suppressed", is_stretch=False,
+            rejection_reason="duplicate_within_90_days", package=None,
+            decision_reason="Suppressed: similar job applied or rejected within 90 days.",
+            checkpoint="duplicate_suppressed", telemetry={"dedup_key": dk, "content_hash": ch}
+        )
+    is_duplicate_flag = (verdict == "flag")
+    if is_duplicate_flag:
+        db.log_message(f"Dedup Flag: Job '{title}' at '{company}' flagged as possible duplicate within 90 days.")
 
     # Step 2: 3-Tier Constraint & Free Signal Evaluation
     signals: EvaluationSignals = evaluate_opportunity(title, company, desc_text, cfg=cfg)
 
+    # If restored from archive by human, bypass the title hard block
+    if skip_title_block and signals.hard_block and signals.hard_reason == "qa_test_title":
+        signals.hard_block = False
+        signals.hard_reason = None
+        min_sc = cfg.get("settings", {}).get("min_score", 70)
+        signals.route = "queue" if signals.deterministic_score >= min_sc else ("explore" if signals.deterministic_score >= min_sc - 20 else "queue")
+
+    # If flagged as possible duplicate, tag it clearly in reasons and telemetry
+    if is_duplicate_flag:
+        signals.penalties.append({"type": "duplicate_warning", "badge": f"[Possible duplicate of {company} / {title}]"})
+        if signals.top_bullets is not None:
+            signals.top_bullets.insert(0, f"[Possible duplicate of {company} / {title}]")
+
     # Tier-1 Hard Invariants: Instant Archive
     if signals.hard_block:
+        route_name = signals.route or ("blocked_title" if signals.hard_reason == "qa_test_title" else "constraint")
         hard_reason_str = f"Tier-1 Invariant Hard Block: {signals.hard_reason}"
-        db.log_message(f"⛔ Hard Block [{signals.hard_reason}]: Skipped '{title}' at '{company}'")
+        db.log_message(f"⛔ Hard Block [{signals.hard_reason}]: Auto-Archived '{title}' at '{company}' (route={route_name})")
         features_json_str = json.dumps(signals.to_features_dict())
         
         if url and not dry_run:
-            transition(url, JobState.REJECTED, checkpoint="hard_block_rejected", detail=hard_reason_str)
+            # Log blocked titles ONLY in evaluations table (route='blocked_title')
+            # and NEVER in applications table to avoid dashboard metrics pollution.
             db.log_evaluation(
                 url=url, title=title, company=company, jd_text=desc_text,
                 llm_score=0, rag_score=0.0, seniority="entry", skill_overlap=0.0,
-                route="constraint", propensity=0.0, eval_model=None, prompt_version=None,
+                route=route_name, propensity=0.0, eval_model=None, prompt_version=None,
                 dedup_key=dk, content_hash=ch, features_json=features_json_str,
                 decision_reason=hard_reason_str, outcome_stage="rejected"
-            )
-            db.save_to_db(
-                url=url, title=title, company=company, platform=platform, status="Skipped",
-                detail=hard_reason_str, score=0, rag_score=0.0, seniority="entry",
-                skill_overlap=0.0, jd_text=desc_text, content_hash=ch, dedup_key=dk,
-                features_json=features_json_str, decision_reason=hard_reason_str,
-                outcome_stage="rejected", checkpoint="hard_block_rejected"
             )
 
         return JobLifecycleResult(
             url=url, title=title, company=company, state=JobState.REJECTED,
-            score=0, route="constraint", is_stretch=False,
+            score=0, route=route_name, is_stretch=False,
             rejection_reason=signals.hard_reason, package=None,
             decision_reason=hard_reason_str, checkpoint="hard_block_rejected",
             telemetry=signals.to_features_dict()
         )
+
+    # Initial state transition: DISCOVERED (only after passing hard invariants)
+    if url and not dry_run:
+        transition(url, JobState.DISCOVERED, checkpoint="discovered", detail=f"Discovered via {platform}")
 
     score = signals.deterministic_score
     routing = signals.route
@@ -269,14 +292,38 @@ def process_job(
                 package_path=pkg.package_dir if pkg else None
             )
 
-    db.log_message(f"📦 [{tag}] ({score}%): Opportunity prepared and awaiting review in Approvals.")
+    # Safety Invariant: Only route 'queue' with verdict 'pass' may skip human approval,
+    # and ONLY when safe_mode=False AND dry_run_mode=False (and require_approval=False) set explicitly.
+    settings = cfg.get("settings", {})
+    safe_mode = settings.get("safe_mode", True)
+    dry_run_mode = settings.get("dry_run_mode", True)
+    require_approval = settings.get("require_approval", True)
+
+    can_auto_approve = (
+        safe_mode is False
+        and dry_run_mode is False
+        and require_approval is False
+        and routing == "queue"
+        and verdict == "pass"
+        and getattr(signals, "language", "en") == "en"
+        and not signals.is_stretch
+        and score >= 85
+    )
+
+    final_state = JobState.READY_FOR_APPROVAL
+    chk = "ready_for_approval"
+    if can_auto_approve:
+        if url and not dry_run:
+            transition(url, JobState.APPROVED, checkpoint="auto_approved")
+        final_state = JobState.APPROVED
+        chk = "auto_approved"
 
     return JobLifecycleResult(
         url=url, title=title, company=company,
-        state=JobState.READY_FOR_APPROVAL, score=score,
+        state=final_state, score=score,
         route=routing, is_stretch=signals.is_stretch,
         rejection_reason=None, package=pkg.to_dict() if pkg else None,
-        decision_reason=decision_reason, checkpoint="ready_for_approval",
+        decision_reason=decision_reason, checkpoint=chk,
         telemetry=features
     )
 
@@ -321,7 +368,14 @@ async def execute_ats_submission(
             f"cannot be submitted without explicit human approval click."
         )
 
-    # Invariant 3: Daily Apply Cap enforced from DB count before execution
+    # Invariant 3: Suppressed duplicate jobs must never be submitted
+    desc = job.get("jd_text") or job.get("description", "")
+    if db.suppression_verdict(None, company, title, desc) == "suppress":
+        raise AssertionError(
+            f"Security Invariant Violated: Submission attempted on suppressed duplicate job '{title}' @ '{company}'."
+        )
+
+    # Invariant 4: Daily Apply Cap enforced from DB count before execution
     settings = CONFIG.get("settings", {})
     daily_cap = settings.get("daily_apply_cap", 25)
     today_applied = db.get_daily_apply_count()

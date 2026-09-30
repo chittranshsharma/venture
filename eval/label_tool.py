@@ -65,10 +65,32 @@ if not rows:
     print("Run the bot in collect-only mode to rapidly harvest JDs across queries.")
     sys.exit(0)
 
-# 3. Uniform random sample (seed=1 for reproducibility, up to 120 rows)
-# Avoids conditioning / bias on LLM scores
+def norm(s):
+    return re.sub(r"\W+", " ", (s or "").lower()).strip()
+
+seen_keys = set()
+for path_str in ["eval/labels_dedup.jsonl", "eval/labels.jsonl", "eval/holdout_labels.jsonl"]:
+    p = Path(path_str)
+    if p.exists():
+        for line in p.open(encoding="utf-8"):
+            if line.strip():
+                try:
+                    rec = json.loads(line)
+                    seen_keys.add((norm(rec.get("company", "")), norm(rec.get("title", ""))))
+                except Exception:
+                    pass
+
+# 3. Filter rows to unique (company, title) jobs not seen in existing datasets
+filtered_rows = []
+seen_in_batch = set()
+for r in rows:
+    k = (norm(r["company"]), norm(r["title"]))
+    if k not in seen_keys and k not in seen_in_batch:
+        seen_in_batch.add(k)
+        filtered_rows.append(r)
+
 random.seed(1)
-pool = random.sample(rows, min(len(rows), 120))
+pool = random.sample(filtered_rows, min(len(filtered_rows), 120)) if filtered_rows else []
 
 print(f"\n" + "=" * 80)
 print(f" VENTURE HUMAN EVALUATION LABELING TOOL")
@@ -102,10 +124,26 @@ with OUT.open("a", encoding="utf-8") as f:
         chosen_label = mapping[k]
         reason_tag = ""
         if chosen_label == "skip":
-            print("Reason for skip? [1]seniority [2]stack [3]location [4]domain [5]company [6]pay [Enter to skip]: ", end="", flush=True)
-            r_in = input().strip()
-            reasons = {"1": "seniority", "2": "stack", "3": "location", "4": "domain", "5": "company", "6": "pay"}
-            reason_tag = reasons.get(r_in, r_in)
+            reasons = {
+                "1": "seniority", "s": "seniority",
+                "2": "stack",     "k": "stack",
+                "3": "qa",        "q": "qa",
+                "4": "location",  "l": "location",
+                "5": "domain",    "d": "domain",
+                "6": "company",   "c": "company",
+                "7": "pay",       "p": "pay",
+                "8": "other",     "o": "other",
+            }
+            while not reason_tag:
+                print("Reason for skip REQUIRED: [s]eniority [k]stack [q]a [l]ocation [d]omain [c]ompany [p]ay [o]ther > ", end="", flush=True)
+                r_in = input().strip().lower()
+                if r_in in reasons:
+                    reason_tag = reasons[r_in]
+                elif r_in:
+                    reason_tag = r_in
+                else:
+                    print("Empty tag rejected! You must specify a reason tag for skips.")
+
 
         record = {
             "url": r["url"],
