@@ -10,6 +10,7 @@ recruiter_contacts.csv
 *.db
 *.db-shm
 *.db-wal
+venture_backup_*.db
 backups/
 bot_logs.txt
 edge-debug-profile/

@@ -26,12 +26,12 @@ class JobState:
     OFFER              = "OFFER"
     GHOSTED            = "GHOSTED"
 
-    # Legacy aliases for backward compatibility
+    # Form and error aliases
     QUALIFIED          = "EVALUATED"
     FORM_OPENED        = "EXECUTING"
     RESUME_UPLOADED    = "EXECUTING"
-    FIELDS_FILLED      = "EXECUTING"
-    NEEDS_RETRY        = "RETRYABLE"
+    FIELDS_FILLED      = "FIELDS_FILLED"
+    NEEDS_RETRY        = "NEEDS_RETRY"
     REJECTED_POST      = "REJECTED"
 
 
@@ -81,7 +81,7 @@ FSM_TO_APP_STATUS = {
     "EXECUTING":          "Applying",
     "FORM_OPENED":        "Applying",
     "RESUME_UPLOADED":    "Applying",
-    "FIELDS_FILLED":      "Applying",
+    "FIELDS_FILLED":      "Fields Filled",
     "SUBMITTED":          "Applied",
     "INTERVIEW":          "Interview",
     "OFFER":              "Offer",
@@ -101,6 +101,8 @@ APP_STATUS_TO_FSM = {
     "Approval Needed":       "READY_FOR_APPROVAL",
     "Approved":              "APPROVED",
     "Applying":              "EXECUTING",
+    "Fields Filled":         "FIELDS_FILLED",
+    "FIELDS_FILLED":         "FIELDS_FILLED",
     "Applied":               "SUBMITTED",
     "Manual Approval Apply": "SUBMITTED",
     "Interview":             "INTERVIEW",
@@ -113,6 +115,7 @@ APP_STATUS_TO_FSM = {
     "Skipped":               "REJECTED",
     "Failed":                "FAILED",
     "Needs Retry":           "RETRYABLE",
+    "NEEDS_RETRY":           "NEEDS_RETRY",
 }
 
 

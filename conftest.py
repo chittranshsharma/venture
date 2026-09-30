@@ -19,3 +19,8 @@ def mock_resume_if_missing():
             yield
     else:
         yield
+
+@pytest.fixture(autouse=True)
+def default_input_submit(monkeypatch):
+    """Default input() to SUBMIT in tests unless explicitly mocked or overridden."""
+    monkeypatch.setattr("builtins.input", lambda prompt="": "SUBMIT")

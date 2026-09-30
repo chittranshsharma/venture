@@ -88,6 +88,7 @@ DEFAULT_CONFIG = {
         "cloud_ai_password": "",
         "safe_mode": True,
         "dry_run_mode": True,
+        "confirm_before_submit": True,
         "daily_apply_cap": 25,
         "min_delay_seconds": 15,
         "max_delay_seconds": 45

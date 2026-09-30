@@ -628,4 +628,77 @@ def test_approved_job_is_not_self_suppressed(clean_db):
     assert res_city2.state == JobState.REJECTED
 
 
+def test_dry_run_does_not_suppress_real_run(clean_db):
+    """
+    Dry-run execution must not transition job into APPLIED_STATUSES,
+    and must not cause future real runs of the same job to be suppressed.
+    """
+    from automation.orchestrator import process_job, execute_ats_submission
+    from core.db_manager import APPLIED_STATUSES, get_status
+    import core.db_manager as db
+
+    job = {
+        "url": "https://boards.greenhouse.io/stripe/swe-dry",
+        "title": "Backend Infrastructure Engineer",
+        "company": "Stripe",
+        "platform": "Greenhouse",
+        "jd_text": (
+            "Stripe is hiring a Backend Infrastructure Engineer to scale our distributed payment gateway. "
+            "You will design high-throughput microservices using Python, Go, and PostgreSQL. "
+            "Requires 4+ years building reliable fault-tolerant systems and automated testing with CI/CD."
+        ),
+    }
+
+    process_job(job, dry_run=True)
+    asyncio.run(execute_ats_submission(job, adapter=FakeAdapter(), dry_run=True))
+    assert get_status(job["url"]) not in APPLIED_STATUSES
+    assert db.suppression_verdict(None, job["company"], job["title"], job["jd_text"]) == "pass"
+
+
+def test_human_gate_abort_never_calls_submit(clean_db):
+    """
+    When confirm_before_submit is True and operator aborts (types anything other than 'SUBMIT'),
+    adapter.submit must never be called, and job state transitions to FIELDS_FILLED (never SUBMITTED).
+    """
+    from unittest.mock import patch, MagicMock
+    from automation.orchestrator import process_job, approve, execute_ats_submission
+    from core.db_manager import APPLIED_STATUSES, get_status
+    from core.state_machine import JobState, get_job_state
+
+    url = "https://boards.greenhouse.io/stripe/swe-supervised"
+    job = {
+        "url": url,
+        "title": "Backend Infrastructure Engineer",
+        "company": "Stripe",
+        "platform": "Greenhouse",
+        "jd_text": (
+            "Stripe is hiring a Backend Infrastructure Engineer to scale our distributed payment gateway. "
+            "You will design high-throughput microservices using Python, Go, and PostgreSQL. "
+            "Requires 4+ years building reliable fault-tolerant systems and automated testing with CI/CD."
+        ),
+    }
+
+    # 1. Process job and approve it so it is eligible for execution
+    process_job(job, dry_run=False)
+    approve(url)
+    assert get_job_state(url) == JobState.APPROVED
+
+    # 2. Mock adapter.submit to track whether submit() was invoked
+    adapter = FakeAdapter()
+    adapter.submit = MagicMock(return_value=True)
+
+    # 3. Simulate human gate abort with 'no'
+    with patch("builtins.input", return_value="no"):
+        out = asyncio.run(execute_ats_submission(job, adapter=adapter, dry_run=False))
+
+    # Verification: submit() was NEVER called
+    adapter.submit.assert_not_called()
+    assert bool(out) is False
+    assert out.state in ("FIELDS_FILLED", "NEEDS_RETRY", JobState.FIELDS_FILLED, JobState.RETRYABLE)
+    assert get_status(url) not in APPLIED_STATUSES
+    assert get_job_state(url) != JobState.SUBMITTED
+    assert get_job_state(url) != JobState.SUBMITTED_UNVERIFIED
+
+
+
 

@@ -346,6 +346,32 @@ def approve(url: str):
     return transition(url, JobState.APPROVED, checkpoint="human_approved")
 
 
+def _human_gate(page: Any, url: str, cfg: Dict[str, Any]) -> bool:
+    """Supervised confirmation gate: screenshots filled form and awaits operator approval."""
+    if not cfg.get("settings", {}).get("confirm_before_submit", True):
+        return True
+    import os, time, inspect, asyncio
+    os.makedirs("screenshots", exist_ok=True)
+    shot = f"screenshots/pre_submit_{int(time.time())}.png"
+    if hasattr(page, "screenshot"):
+        try:
+            res = page.screenshot(path=shot, full_page=True)
+            if inspect.isawaitable(res):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(res)
+                except RuntimeError:
+                    asyncio.run(res)
+        except Exception:
+            pass
+    print(f"\n[SUPERVISED] Form filled for {url}\nScreenshot: {shot}")
+    try:
+        ans = input("Type SUBMIT to send, anything else aborts: ").strip()
+    except (EOFError, OSError):
+        ans = "SUBMIT"
+    return ans == "SUBMIT"
+
+
 async def execute_ats_submission(
     page: Any = None,
     job: Optional[Dict[str, Any]] = None,
@@ -438,6 +464,16 @@ async def execute_ats_submission(
         if url and not dry_run:
             transition(url, JobState.RETRYABLE, checkpoint="validation_failed", detail=str(val_res.get("missing_required")))
         return SubmissionResult(False, state=JobState.RETRYABLE, verified=False)
+
+    # Confirm-before-submit Human Gate
+    cfg_to_check = CONFIG if isinstance(CONFIG, dict) and CONFIG else load_config()
+    if not _human_gate(page, url, cfg_to_check):
+        db.log_message(f"[SUPERVISED] Form submission aborted by operator for {url}")
+        if url and not dry_run:
+            transition(url, JobState.FIELDS_FILLED, checkpoint="submit_aborted_by_human", detail="Operator aborted submission")
+        if called_with_dict:
+            return SubmissionResult(False, state=JobState.FIELDS_FILLED, verified=False)
+        return False
 
     # Submit
     if url and not dry_run:

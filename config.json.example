@@ -50,6 +50,7 @@
         "target_platforms": ["Indeed", "Naukri", "LinkedIn"],
         "safe_mode": true,
         "dry_run_mode": true,
+        "confirm_before_submit": true,
         "daily_apply_cap": 10,
         "min_delay_seconds": 15,
         "max_delay_seconds": 45

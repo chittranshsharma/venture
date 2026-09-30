@@ -115,12 +115,12 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
         placeholders = ",".join("?" for _ in APPLIED_STATUSES)
         # suppression query: filter applied applications by status and applied_at while ignoring exclude_url
         q = f"""
-            SELECT jd_text, 'applied', NULL FROM applications
+            SELECT jd_text, 'applied', NULL, url FROM applications
               WHERE dedup_key=? AND applied_at >= ?
                 AND status IN ({placeholders})
                 AND (? IS NULL OR url != ?)
             UNION ALL
-            SELECT e.jd_text, 'rejected', d.reject_reason FROM decisions d
+            SELECT e.jd_text, 'rejected', d.reject_reason, e.url FROM decisions d
               JOIN evaluations e ON e.url = d.url
               WHERE e.dedup_key=? AND d.label='reject' AND (d.decided_at >= ? OR d.decided_at >= ?)
                 AND (? IS NULL OR d.url != ?)
@@ -131,7 +131,7 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
         )
         rows = conn.execute(q, args).fetchall()
         verdict = "pass"
-        for prior, kind, reason in rows:
+        for prior, kind, reason, prior_url in rows:
             if kind == "rejected" and reason in NO_SUPPRESS_REASONS:
                 continue                      # only location-based rejects allow reposts
             prior = prior or ""
@@ -140,8 +140,10 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
             else:
                 s = jd_similarity(jd_text or "", prior)
             if s >= 0.85:
+                log_message(f"[DEDUP SUPPRESS] sim={s:.2f} incoming_url={exclude_url or 'unknown'} prior_url={prior_url} key={key}")
                 return "suppress"
             if s >= 0.5:
+                log_message(f"[DEDUP FLAG] sim={s:.2f} incoming_url={exclude_url or 'unknown'} prior_url={prior_url} key={key}")
                 verdict = "flag"
         return verdict
     except Exception:
@@ -1186,6 +1188,8 @@ def get_state(url: str):
         except Exception as e:
             log_message(f"Error getting state for {url}: {e}")
             return None
+
+get_status = get_state
 
 def update_state(url: str, new_state: str, detail: str = ""):
     """P2.3 — Atomically transition application to new state in SQLite."""
