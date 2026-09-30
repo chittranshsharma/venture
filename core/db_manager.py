@@ -66,50 +66,105 @@ def jd_similarity(a: str, b: str) -> float:
         return 0.0
     return len(A & B) / max(len(A | B), 1)
 
-def is_suppressed(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90, sim: float = 0.85) -> bool:
+BLOCK_REASONS = {"not_fit", "company", "seniority", "duplicate"}  # not location/unsure/other
+
+def suppression_verdict(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90) -> str:
     """
-    Cross-platform 90-day suppression using shingle similarity (Jaccard >= sim).
-    Covers both past applications and past decisions (rejects).
-    Supports calling with or without an explicit sqlite3 connection:
-      is_suppressed(conn, company, title, jd_text, window_days, sim)
-      is_suppressed(company, title, jd_text, window_days, sim)
+    Determine dedup suppression verdict: 'suppress' | 'flag' | 'pass'.
+    - suppress: High confidence duplicate (similarity >= 0.85).
+    - flag: Moderate match (0.5 <= sim < 0.85) or text too short (<200 chars) to reliably distinguish.
+    - pass: Distinct job, or past rejection was due to soft reasons like location/unsure.
+    Supports calling with or without explicit connection:
+      suppression_verdict(conn, company, title, jd_text, window_days)
+      suppression_verdict(company, title, jd_text, window_days)
     """
     if isinstance(conn, str):
         c = conn
         t = company or ""
         jd = title or ""
         w_days = jd_text if isinstance(jd_text, int) else window_days
-        s_val = window_days if isinstance(window_days, (int, float)) and window_days <= 1.0 else sim
         try:
             with _get_connection() as direct_conn:
-                return is_suppressed(direct_conn, c, t, jd, window_days=w_days, sim=s_val)
+                return suppression_verdict(direct_conn, c, t, jd, window_days=w_days)
         except Exception:
-            return False
+            return "pass"
 
     if conn is None:
         try:
             with _get_connection() as direct_conn:
-                return is_suppressed(direct_conn, company or "", title or "", jd_text or "", window_days=window_days, sim=sim)
+                return suppression_verdict(direct_conn, company or "", title or "", jd_text or "", window_days=window_days)
         except Exception:
-            return False
+            return "pass"
 
     key = compute_dedup_key(company or "", title or "")
     cutoff = (datetime.now() - timedelta(days=window_days)).isoformat()
     cutoff_space = cutoff.replace("T", " ")
     try:
         rows = conn.execute("""
-            SELECT jd_text FROM applications WHERE dedup_key=? AND applied_at >= ?
+            SELECT jd_text, 'applied', NULL FROM applications
+              WHERE dedup_key=? AND applied_at >= ?
             UNION ALL
-            SELECT e.jd_text FROM decisions d JOIN evaluations e ON e.url = d.url
-            WHERE e.dedup_key=? AND d.decided_at >= ?""",
-            (key, cutoff, key, cutoff_space)).fetchall()
-        return any(jd_similarity(jd_text or "", r[0] or "") >= sim for r in rows)
+            SELECT e.jd_text, 'rejected', d.reject_reason FROM decisions d
+              JOIN evaluations e ON e.url = d.url
+              WHERE e.dedup_key=? AND d.label='reject' AND (d.decided_at >= ? OR d.decided_at >= ?)""",
+            (key, cutoff, key, cutoff, cutoff_space)).fetchall()
+        verdict = "pass"
+        for prior, kind, reason in rows:
+            if kind == "rejected" and reason not in BLOCK_REASONS:
+                continue                      # location/unsure reject must not hide other cities
+            prior = prior or ""
+            if len(prior) < 200 or len(jd_text or "") < 200:
+                s = 0.7                       # too short to compare: flag, do not pass
+            else:
+                s = jd_similarity(jd_text or "", prior)
+            if s >= 0.85:
+                return "suppress"
+            if s >= 0.5:
+                verdict = "flag"
+        return verdict
     except Exception:
-        return False
+        return "pass"
+
+def is_suppressed(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90, sim: float = 0.85) -> bool:
+    """Convenience boolean check: True if suppression_verdict is 'suppress'."""
+    return suppression_verdict(conn, company, title, jd_text, window_days=window_days) == "suppress"
 
 def is_application_suppressed(company: str, title: str, content_hash: str | None = None, window_days: int = 90, jd_text: str = "") -> bool:
-    """Backward-compatible suppression check delegating to is_suppressed."""
+    """Backward-compatible suppression check delegating to suppression_verdict."""
     return is_suppressed(None, company, title, jd_text, window_days=window_days)
+
+def get_archived_evaluations() -> list:
+    """Retrieve all blocked opportunities from evaluations table (route='blocked_title')."""
+    try:
+        with _get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT id, url, title, company, jd_text, route, decision_reason, evaluated_at
+                FROM evaluations
+                WHERE route = 'blocked_title'
+                ORDER BY evaluated_at DESC
+            """).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        log_message(f"Error fetching archived evaluations: {e}")
+        return []
+
+def restore_archived_job(url: str, cfg: dict = None):
+    """Restore a blocked title from evaluations and re-process with skip_title_block=True."""
+    with _get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM evaluations WHERE url = ? AND route = 'blocked_title'", (url,)).fetchone()
+        if not row:
+            return None
+        job = {
+            "url": row["url"],
+            "title": row["title"],
+            "company": row["company"],
+            "jd_text": row["jd_text"],
+            "platform": "Restored Archive",
+        }
+    from automation.orchestrator import process_job
+    return process_job(job, cfg=cfg, dry_run=False, skip_title_block=True)
 
 def compute_content_hash(text: str) -> str:
     """Normalized JD content hash to detect genuine revisions, ignoring dynamic scrape artifacts."""
@@ -460,12 +515,9 @@ def _run_schema_migrations_locked(conn):
 
         if v < 7:
             for tbl in ("applications", "evaluations"):
-                try:
-                    for id_, c, t in conn.execute(f"SELECT id, company, title FROM {tbl}").fetchall():
-                        conn.execute(f"UPDATE {tbl} SET dedup_key=? WHERE id=?",
-                                     (compute_dedup_key(c or "", t or ""), id_))
-                except Exception as e:
-                    print(f"[DB Migration] Note migrating {tbl} to v7: {e}")
+                for id_, c, t in conn.execute(f"SELECT id, company, title FROM {tbl}").fetchall():
+                    conn.execute(f"UPDATE {tbl} SET dedup_key=? WHERE id=?",
+                                 (compute_dedup_key(c or "", t or ""), id_))
 
             conn.execute("PRAGMA user_version = 7")
             conn.commit()

@@ -64,8 +64,8 @@ def _init_base_schema(conn):
     conn.commit()
 
 
-def test_fresh_database_migration_v4(isolated_db):
-    """A fresh DB should migrate sequentially to user_version = 4 with all tables, columns, and indexes."""
+def test_fresh_database_migration_full(isolated_db):
+    """A fresh DB should migrate sequentially to user_version = 7 with all tables, columns, and indexes."""
     conn = sqlite3.connect(isolated_db)
     try:
         _init_base_schema(conn)
@@ -314,4 +314,43 @@ def test_migration_v7_location_free_dedup_key(isolated_db):
     assert len(eval_keys) == 2
     assert eval_keys[0] == eval_keys[1], "Both city evaluations must now share the exact same canonical dedup_key"
     assert eval_keys[0] == compute_dedup_key("NovaTech Solutions", "Full Stack Engineer")
+    conn.close()
+
+
+@pytest.mark.parametrize("start_version", [1, 2, 3, 4, 5, 6])
+def test_upgrade_from_intermediate_version_to_v7(isolated_db, start_version):
+    """Migrating from any intermediate user_version 1..6 must successfully reach v7."""
+    conn = sqlite3.connect(isolated_db)
+    _init_base_schema(conn)
+    _run_schema_migrations_locked(conn)  # Migrates to latest v7
+    
+    # Artificially set user_version to start_version
+    conn.execute(f"PRAGMA user_version = {start_version}")
+    conn.commit()
+
+    # Re-run migration
+    _run_schema_migrations_locked(conn)
+    final_v = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert final_v == 7, f"Migration from version {start_version} must reach user_version 7"
+    conn.close()
+
+
+def test_migration_failure_preserves_user_version(isolated_db):
+    """If an unrecoverable SQL error occurs during a migration block, user_version remains unchanged."""
+    conn = sqlite3.connect(isolated_db)
+    _init_base_schema(conn)
+    _run_schema_migrations_locked(conn)
+    
+    # Set to version 6
+    conn.execute("PRAGMA user_version = 6")
+    conn.commit()
+
+    # Drop evaluations table so v7 migration fails when selecting from it
+    conn.execute("DROP TABLE evaluations")
+    conn.commit()
+
+    # Run migrations; error will be logged and user_version must remain 6
+    _run_schema_migrations_locked(conn)
+    v_after = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert v_after == 6, f"Failed migration must not advance user_version (remains {v_after})"
     conn.close()

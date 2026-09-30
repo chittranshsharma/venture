@@ -278,3 +278,142 @@ def test_rejected_decision_suppresses_repost(clean_db):
     assert res.route == "suppressed"
     assert res.rejection_reason == "duplicate_within_90_days"
 
+
+def test_short_jd_suppression_verdict_not_pass(clean_db):
+    """
+    When JD text is short (<200 characters), similarity cannot be computed reliably.
+    suppression_verdict must return 'flag' (or 'suppress') and NEVER 'pass'.
+    """
+    company = "TinyCorp"
+    title = "Backend Engineer"
+    short_jd1 = "Looking for a Python dev. Location: Remote. Great pay."
+    url1 = "https://boards.greenhouse.io/tinycorp/1"
+    
+    db.save_to_db(
+        url=url1,
+        title=title,
+        company=company,
+        platform="Greenhouse",
+        status="Applied",
+        score=80,
+        jd_text=short_jd1,
+    )
+
+    short_jd2 = "Looking for a Python dev. Location: New York, NY. Great pay."
+    verdict = db.suppression_verdict(company, title, short_jd2)
+    assert verdict != "pass", f"Short JD must not silently pass; got verdict: {verdict}"
+    assert verdict in ("flag", "suppress")
+
+
+def test_reject_reason_location_does_not_suppress_another_city(clean_db):
+    """
+    A past rejection with reason 'location' (or other soft reason) must NOT suppress
+    a repost in a different city. suppression_verdict must be 'pass'.
+    """
+    company = "MetroTech"
+    title = "Data Platform Engineer"
+    body = (
+        "MetroTech is seeking a Data Platform Engineer with Apache Spark, Snowflake, "
+        "and Airflow experience to manage automated data pipelines across multi-region datacenters."
+    )
+    url_ny = "https://boards.greenhouse.io/metrotech/1"
+    db.log_evaluation(
+        url=url_ny,
+        title=title,
+        company=company,
+        jd_text=f"{body} Location: New York, NY.",
+        route="queue",
+    )
+    db.log_approval_decision(
+        url=url_ny,
+        label="reject",
+        reject_reason="location",  # Soft reason!
+        score=75,
+        propensity=1.0,
+    )
+
+    # Candidate sees same role in London
+    url_london = "https://boards.greenhouse.io/metrotech/2"
+    jd_london = f"{body} Location: London, UK."
+    verdict = db.suppression_verdict(company, title, jd_london)
+    assert verdict == "pass", f"Location rejection must not suppress other locations; got verdict: {verdict}"
+
+
+def test_reject_reason_not_fit_suppresses(clean_db):
+    """
+    A past rejection with reason 'not_fit' (hard block reason) MUST suppress
+    a multi-city repost. suppression_verdict must be 'suppress'.
+    """
+    company = "MetroTech"
+    title = "Data Platform Engineer"
+    body = (
+        "MetroTech is seeking a Data Platform Engineer with Apache Spark, Snowflake, "
+        "and Airflow experience to manage automated data pipelines across multi-region datacenters. "
+        "Must have 5+ years building distributed ETL architectures and streaming Kafka infrastructure. "
+        "Solid command of SQL performance tuning and database clustering is mandatory. "
+        "Responsibilities include designing reliable streaming pipelines, collaborating with data scientists, "
+        "optimizing query latency on massive datasets, and maintaining CI/CD deployment pipelines on AWS."
+    )
+    url_ny = "https://boards.greenhouse.io/metrotech/1"
+    db.log_evaluation(
+        url=url_ny,
+        title=title,
+        company=company,
+        jd_text=f"{body} Location: New York, NY. Comprehensive healthcare benefits.",
+        route="queue",
+    )
+    db.log_approval_decision(
+        url=url_ny,
+        label="reject",
+        reject_reason="not_fit",  # Hard reason!
+        score=35,
+        propensity=1.0,
+    )
+
+    url_london = "https://boards.greenhouse.io/metrotech/2"
+    jd_london = f"{body} Location: London, UK. Comprehensive healthcare benefits."
+    verdict = db.suppression_verdict(company, title, jd_london)
+    assert verdict == "suppress", f"not_fit rejection must suppress reposts; got verdict: {verdict}"
+
+
+def test_blocked_job_restore_reaches_approvals_queue(clean_db):
+    """
+    A job blocked by QA title invariant is logged only to evaluations (route='blocked_title').
+    When restored via restore_archived_job, it bypasses the title block and reaches Approvals queue.
+    """
+    from automation.orchestrator import process_job
+
+    url = "https://boards.greenhouse.io/hpe/qa-engineer-1"
+    job = {
+        "url": url,
+        "title": "Lead QA Test Engineer - Automation",
+        "company": "Hewlett Packard Enterprise",
+        "jd_text": "Building automated Python test suites, Selenium web testing, and CI regression pipelines.",
+        "platform": "Greenhouse",
+    }
+    # 1. Normal run: gets hard-blocked
+    res = process_job(job, dry_run=False)
+    assert res.route == "blocked_title"
+    assert res.state == JobState.REJECTED
+
+    # Verify not in applications table
+    with sqlite3.connect(clean_db) as conn:
+        app_count = conn.execute("SELECT COUNT(*) FROM applications WHERE url = ?", (url,)).fetchone()[0]
+        assert app_count == 0, "Blocked title must NOT be saved in applications table"
+        
+        # Verify present in evaluations table
+        eval_row = conn.execute("SELECT route FROM evaluations WHERE url = ?", (url,)).fetchone()
+        assert eval_row is not None and eval_row[0] == "blocked_title"
+
+    # 2. Restore action
+    restored_res = db.restore_archived_job(url)
+    assert restored_res is not None
+    assert restored_res.route != "blocked_title"
+    assert restored_res.state in (JobState.READY_FOR_APPROVAL, JobState.APPROVED, JobState.DISCOVERED, JobState.EVALUATED)
+    
+    # Verify application reached database queue
+    with sqlite3.connect(clean_db) as conn:
+        app_row = conn.execute("SELECT status FROM applications WHERE url = ?", (url,)).fetchone()
+        assert app_row is not None, "Restored application must now exist in applications table"
+        assert app_row[0] in ("Approval Needed", "Suggested", "Applied")
+

@@ -69,6 +69,7 @@ def process_job(
     cfg: Optional[Dict[str, Any]] = None,
     dry_run: Optional[bool] = None,
     auto_prepare: bool = True,
+    skip_title_block: bool = False,
 ) -> JobLifecycleResult:
     """
     Authoritative single-entrypoint for processing an opportunity across all stages.
@@ -105,7 +106,8 @@ def process_job(
             checkpoint=chk, telemetry={"dedup_key": dk, "content_hash": ch}
         )
 
-    if db.is_suppressed(None, company, title, desc_text):
+    verdict = db.suppression_verdict(None, company, title, desc_text)
+    if verdict == "suppress":
         db.log_message(f"Dedup Suppression: Job '{title}' at '{company}' already applied or rejected within 90 days.")
         return JobLifecycleResult(
             url=url, title=title, company=company, state=JobState.REJECTED,
@@ -114,13 +116,25 @@ def process_job(
             decision_reason="Suppressed: similar job applied or rejected within 90 days.",
             checkpoint="duplicate_suppressed", telemetry={"dedup_key": dk, "content_hash": ch}
         )
-
-    # Initial state transition: DISCOVERED
-    if url and not dry_run:
-        transition(url, JobState.DISCOVERED, checkpoint="discovered", detail=f"Discovered via {platform}")
+    is_duplicate_flag = (verdict == "flag")
+    if is_duplicate_flag:
+        db.log_message(f"Dedup Flag: Job '{title}' at '{company}' flagged as possible duplicate within 90 days.")
 
     # Step 2: 3-Tier Constraint & Free Signal Evaluation
     signals: EvaluationSignals = evaluate_opportunity(title, company, desc_text, cfg=cfg)
+
+    # If restored from archive by human, bypass the title hard block
+    if skip_title_block and signals.hard_block and signals.hard_reason == "qa_test_title":
+        signals.hard_block = False
+        signals.hard_reason = None
+        min_sc = cfg.get("settings", {}).get("min_score", 70)
+        signals.route = "queue" if signals.deterministic_score >= min_sc else ("explore" if signals.deterministic_score >= min_sc - 20 else "queue")
+
+    # If flagged as possible duplicate, tag it clearly in reasons and telemetry
+    if is_duplicate_flag:
+        signals.penalties.append({"type": "duplicate_warning", "badge": f"[Possible duplicate of {company} / {title}]"})
+        if signals.top_bullets is not None:
+            signals.top_bullets.insert(0, f"[Possible duplicate of {company} / {title}]")
 
     # Tier-1 Hard Invariants: Instant Archive
     if signals.hard_block:
@@ -130,7 +144,6 @@ def process_job(
         features_json_str = json.dumps(signals.to_features_dict())
         
         if url and not dry_run:
-            transition(url, JobState.REJECTED, checkpoint="hard_block_rejected", detail=hard_reason_str)
             # Log blocked titles ONLY in evaluations table (route='blocked_title')
             # and NEVER in applications table to avoid dashboard metrics pollution.
             db.log_evaluation(
@@ -148,6 +161,10 @@ def process_job(
             decision_reason=hard_reason_str, checkpoint="hard_block_rejected",
             telemetry=signals.to_features_dict()
         )
+
+    # Initial state transition: DISCOVERED (only after passing hard invariants)
+    if url and not dry_run:
+        transition(url, JobState.DISCOVERED, checkpoint="discovered", detail=f"Discovered via {platform}")
 
     score = signals.deterministic_score
     routing = signals.route

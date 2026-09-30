@@ -1,12 +1,15 @@
 # eval/rule_table.py
 import json
 import re
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from automation.composite_scorer import QA_BLOCK
 
 rows = [json.loads(l) for l in open("eval/labels_dedup.jsonl", encoding="utf-8") if l.strip()]
 rows = [r for r in rows if r.get("human_label") != "borderline"]
 
 RULES = {
-    "qa_test":    r"\b(qa|sdet|quality assurance|test engineer|software tester|performance test(ing)?)\b",
+    "qa_test":    QA_BLOCK.pattern,
     "senior":     r"\b(senior|sr\.?|lead|staff|principal|consultant)\b",
     "level_ii":   r"\b(engineer|developer)\s+(ii|iii|2|3)\b",
     "java_net":   r"\b(java|\.net|c#|php)\b",

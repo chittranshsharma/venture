@@ -6,7 +6,8 @@ from tkinter import ttk, messagebox, scrolledtext
 import core.state as state
 from core.db_manager import (
     save_to_db, recalculate_metrics, update_job_status_in_csv,
-    log_approval_decision, get_pending_approvals
+    log_approval_decision, get_pending_approvals,
+    get_archived_evaluations, restore_archived_job
 )
 from automation.bot_runner import apply_single_job_async
 from ui.components import C, F, create_action_btn
@@ -17,6 +18,7 @@ class ApprovalsView(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
         self._active_jobs = {}
+        self._current_mode = "Queue"
 
         # ── Header ──
         title_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -47,6 +49,16 @@ class ApprovalsView(ctk.CTkFrame):
             border_width=1, border_color=C["border"]
         )
         left_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
+
+        # Segmented Mode Switcher: Active Queue vs Blocked Archive
+        self._mode_seg = ctk.CTkSegmentedButton(
+            left_card, values=["Queue", "Archived"],
+            command=self._on_mode_change,
+            selected_color=C["accent"], selected_hover_color=C["accent_hover"],
+            font=F["xs_b"]
+        )
+        self._mode_seg.set("Queue")
+        self._mode_seg.pack(fill='x', padx=12, pady=(12, 6))
 
         columns = ('company', 'role', 'score')
         self.appr_tree = ttk.Treeview(left_card, columns=columns, show='headings', style="Dark.Treeview")
@@ -165,16 +177,19 @@ class ApprovalsView(ctk.CTkFrame):
         btn_row = ctk.CTkFrame(right_card, fg_color="transparent")
         btn_row.grid(row=5, column=0, sticky='ew', padx=14, pady=(0, 14))
         
-        btn_rev = create_action_btn(btn_row, "🔍  Review", self.review_job_in_browser, "secondary", "normal")
-        btn_rev.pack(side='left', padx=(0, 8))
+        self.btn_rev = create_action_btn(btn_row, "🔍  Review", self.review_job_in_browser, "secondary", "normal")
+        self.btn_rev.pack(side='left', padx=(0, 8))
 
-        btn_appr = create_action_btn(btn_row, "✓  Approve & Apply", self.approve_and_apply_job, "primary", "normal")
-        btn_appr.pack(side='left', padx=(0, 8))
+        self.btn_restore = create_action_btn(btn_row, "↺  Restore to Queue", self.restore_selected_archived_job, "accent", "normal")
 
-        btn_rej = create_action_btn(btn_row, "✕  Reject & Skip", self.reject_and_skip_job, "danger", "normal")
-        btn_rej.pack(side='left', padx=(0, 8))
+        self.btn_appr = create_action_btn(btn_row, "✓  Approve & Apply", self.approve_and_apply_job, "primary", "normal")
+        self.btn_appr.pack(side='left', padx=(0, 8))
 
-        ctk.CTkLabel(btn_row, text="Reason:", font=F["xs_b"], text_color=C["muted"]).pack(side='left', padx=(4, 4))
+        self.btn_rej = create_action_btn(btn_row, "✕  Reject & Skip", self.reject_and_skip_job, "danger", "normal")
+        self.btn_rej.pack(side='left', padx=(0, 8))
+
+        self.reject_label = ctk.CTkLabel(btn_row, text="Reason:", font=F["xs_b"], text_color=C["muted"])
+        self.reject_label.pack(side='left', padx=(4, 4))
         self.reject_reason_var = ctk.StringVar(value="unsure")
         self.reject_reason_menu = ctk.CTkOptionMenu(
             btn_row,
@@ -190,6 +205,36 @@ class ApprovalsView(ctk.CTkFrame):
         self.reject_reason_menu.pack(side='left')
 
         self.load_approvals_table()
+
+    def _on_mode_change(self, mode: str):
+        self._current_mode = mode
+        if mode == "Archived":
+            self.btn_appr.pack_forget()
+            self.btn_rej.pack_forget()
+            self.reject_label.pack_forget()
+            self.reject_reason_menu.pack_forget()
+            self.btn_restore.pack(side='left', padx=(0, 8))
+        else:
+            self.btn_restore.pack_forget()
+            self.btn_appr.pack(side='left', padx=(0, 8))
+            self.btn_rej.pack(side='left', padx=(0, 8))
+            self.reject_label.pack(side='left', padx=(4, 4))
+            self.reject_reason_menu.pack(side='left')
+        self.load_approvals_table()
+
+    def restore_selected_archived_job(self):
+        selected = self.appr_tree.selection()
+        if not selected:
+            return
+        url_iid = selected[0]
+        job = self._active_jobs.get(url_iid)
+        if not job:
+            return
+        res = restore_archived_job(job.get("url", ""))
+        if res:
+            messagebox.showinfo("Restored", f"Restored '{job.get('title')}' to Approvals queue.")
+            self._mode_seg.set("Queue")
+            self._on_mode_change("Queue")
 
     # ── helpers ──────────────────────────────────────────────────
 
@@ -209,7 +254,10 @@ class ApprovalsView(ctk.CTkFrame):
         penalties = job.get("penalties") or features.get("penalties", [])
         stretch_signals = job.get("stretch_signals") or features.get("stretch_signals", [])
 
-        if is_stretch:
+        if getattr(self, "_current_mode", "Queue") == "Archived" or job.get("route") == "blocked_title":
+            color = C["red"]
+            badge = "⛔ BLOCKED TITLE"
+        elif is_stretch:
             color = "#38bdf8"  # vibrant cyan
             badge = "⚡ STRETCH OPPORTUNITY"
         elif job.get("source") == "explore":
@@ -275,7 +323,7 @@ class ApprovalsView(ctk.CTkFrame):
         self.appr_desc.insert('end',
             f"DECISION BREAKDOWN:\n{decision_reason}\n\n"
             f"URL: {job.get('url', '')}\n\n"
-            f"JOB DESCRIPTION:\n{job.get('description', '')}"
+            f"JOB DESCRIPTION:\n{job.get('description') or job.get('jd_text', '')}"
         )
 
     def _clear_detail(self):
@@ -293,29 +341,34 @@ class ApprovalsView(ctk.CTkFrame):
         for item in self.appr_tree.get_children():
             self.appr_tree.delete(item)
 
-        # Merge in-memory doubt queue with persisted pending approvals from DB
-        seen_urls = set()
-        jobs_to_show = []
+        if getattr(self, "_current_mode", "Queue") == "Archived":
+            jobs_to_show = get_archived_evaluations()
+        else:
+            # Merge in-memory doubt queue with persisted pending approvals from DB
+            seen_urls = set()
+            jobs_to_show = []
 
-        with state.DOUBT_LOCK:
-            for job in state.DOUBT_QUEUE:
+            with state.DOUBT_LOCK:
+                for job in state.DOUBT_QUEUE:
+                    u = job.get("url")
+                    if u and u not in seen_urls:
+                        seen_urls.add(u)
+                        jobs_to_show.append(job)
+
+            db_pending = get_pending_approvals()
+            for job in db_pending:
                 u = job.get("url")
                 if u and u not in seen_urls:
                     seen_urls.add(u)
                     jobs_to_show.append(job)
 
-        db_pending = get_pending_approvals()
-        for job in db_pending:
-            u = job.get("url")
-            if u and u not in seen_urls:
-                seen_urls.add(u)
-                jobs_to_show.append(job)
-
         self._active_jobs = {j["url"]: j for j in jobs_to_show if j.get("url")}
 
         for job in jobs_to_show:
             tag = ""
-            if job.get("is_stretch"):
+            if getattr(self, "_current_mode", "Queue") == "Archived":
+                tag = " [ARCHIVED]"
+            elif job.get("is_stretch"):
                 tag = " [⚡ STRETCH]"
             elif job.get("source") == "explore":
                 tag = " [EXPLORE]"

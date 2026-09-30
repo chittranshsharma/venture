@@ -68,7 +68,7 @@ _ERROR_STATES = {"FAILED", "RETRYABLE", "NEEDS_RETRY"}
 _TERMINAL_REAPPLICATION_STATES = {
     "SUBMITTED", "INTERVIEW", "OFFER", "REJECTED_POST", "REJECTED", "GHOSTED",
     "Applied", "Rejected", "Withdrawn", "Offer", "Offer Received",
-    "Interview", "Interviewing", "Manual Approval Apply", "Auto-Archived",
+    "Interview", "Interviewing", "Manual Approval Apply",
 }
 
 FSM_TO_APP_STATUS = {
@@ -113,7 +113,6 @@ APP_STATUS_TO_FSM = {
     "Skipped":               "REJECTED",
     "Failed":                "FAILED",
     "Needs Retry":           "RETRYABLE",
-    "Auto-Archived":         "REJECTED",
 }
 
 
