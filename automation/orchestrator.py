@@ -105,6 +105,16 @@ def process_job(
             checkpoint=chk, telemetry={"dedup_key": dk, "content_hash": ch}
         )
 
+    if db.is_suppressed(None, company, title, desc_text):
+        db.log_message(f"Dedup Suppression: Job '{title}' at '{company}' already applied or rejected within 90 days.")
+        return JobLifecycleResult(
+            url=url, title=title, company=company, state=JobState.REJECTED,
+            score=0, route="suppressed", is_stretch=False,
+            rejection_reason="duplicate_within_90_days", package=None,
+            decision_reason="Suppressed: similar job applied or rejected within 90 days.",
+            checkpoint="duplicate_suppressed", telemetry={"dedup_key": dk, "content_hash": ch}
+        )
+
     # Initial state transition: DISCOVERED
     if url and not dry_run:
         transition(url, JobState.DISCOVERED, checkpoint="discovered", detail=f"Discovered via {platform}")
@@ -114,30 +124,26 @@ def process_job(
 
     # Tier-1 Hard Invariants: Instant Archive
     if signals.hard_block:
+        route_name = signals.route or ("blocked_title" if signals.hard_reason == "qa_test_title" else "constraint")
         hard_reason_str = f"Tier-1 Invariant Hard Block: {signals.hard_reason}"
-        db.log_message(f"⛔ Hard Block [{signals.hard_reason}]: Skipped '{title}' at '{company}'")
+        db.log_message(f"⛔ Hard Block [{signals.hard_reason}]: Auto-Archived '{title}' at '{company}' (route={route_name})")
         features_json_str = json.dumps(signals.to_features_dict())
         
         if url and not dry_run:
             transition(url, JobState.REJECTED, checkpoint="hard_block_rejected", detail=hard_reason_str)
+            # Log blocked titles ONLY in evaluations table (route='blocked_title')
+            # and NEVER in applications table to avoid dashboard metrics pollution.
             db.log_evaluation(
                 url=url, title=title, company=company, jd_text=desc_text,
                 llm_score=0, rag_score=0.0, seniority="entry", skill_overlap=0.0,
-                route="constraint", propensity=0.0, eval_model=None, prompt_version=None,
+                route=route_name, propensity=0.0, eval_model=None, prompt_version=None,
                 dedup_key=dk, content_hash=ch, features_json=features_json_str,
                 decision_reason=hard_reason_str, outcome_stage="rejected"
-            )
-            db.save_to_db(
-                url=url, title=title, company=company, platform=platform, status="Skipped",
-                detail=hard_reason_str, score=0, rag_score=0.0, seniority="entry",
-                skill_overlap=0.0, jd_text=desc_text, content_hash=ch, dedup_key=dk,
-                features_json=features_json_str, decision_reason=hard_reason_str,
-                outcome_stage="rejected", checkpoint="hard_block_rejected"
             )
 
         return JobLifecycleResult(
             url=url, title=title, company=company, state=JobState.REJECTED,
-            score=0, route="constraint", is_stretch=False,
+            score=0, route=route_name, is_stretch=False,
             rejection_reason=signals.hard_reason, package=None,
             decision_reason=hard_reason_str, checkpoint="hard_block_rejected",
             telemetry=signals.to_features_dict()

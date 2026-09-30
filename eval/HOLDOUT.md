@@ -1,7 +1,9 @@
 # VENTURE Scorer Holdout Protocol & Design Freeze
 
-**Frozen Tag**: `scorer-frozen-v1`  
-**Base Commit**: `712be42a85f66d064bf321f5d557dbb201eb9c49`
+> [!NOTE]
+> **Status**: `scorer-frozen-v1` was superseded and **never evaluated on holdout data**.
+> Grouped CV by company demonstrates that at n=56, free features produce marginal signal (Grouped CV-AUC ~0.54–0.57). Holdout labels will not be burned on this design. Evaluation is deferred until total labels reach $\ge 200$ (or a validated model design is chosen), at which point a fresh tag `scorer-frozen-v2` (without `-f`) will be created for the holdout run.
+
 
 ---
 

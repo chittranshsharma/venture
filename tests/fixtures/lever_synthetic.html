@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Lever Application Page</title>
+</head>
+<body>
+  <div class="application-page">
+    <form id="application-form" action="/apply" method="POST" enctype="multipart/form-data">
+      <div class="application-question">
+        <label>Full name</label>
+        <input class="application-field" type="text" name="name" required />
+      </div>
+      <div class="application-question">
+        <label>Email</label>
+        <input class="application-field" type="email" name="email" required />
+      </div>
+      <div class="application-question">
+        <label>Phone</label>
+        <input class="application-field" type="tel" name="phone" />
+      </div>
+      <div class="application-question">
+        <label>Current company</label>
+        <input class="application-field" type="text" name="org" />
+      </div>
+      <div class="application-question">
+        <label>LinkedIn URL</label>
+        <input class="application-field" type="text" name="urls[LinkedIn]" />
+      </div>
+      <div class="application-question">
+        <label>GitHub URL</label>
+        <input class="application-field" type="text" name="urls[GitHub]" />
+      </div>
+      <div class="application-question">
+        <label>Portfolio URL</label>
+        <input class="application-field" type="text" name="urls[Portfolio]" />
+      </div>
+      <div class="application-question">
+        <label>Resume</label>
+        <input type="file" name="resume" accept=".pdf,.doc,.docx" />
+      </div>
+      <div class="application-action">
+        <button id="btn-submit" type="submit" class="template-btn-submit">Submit Application</button>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

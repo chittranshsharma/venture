@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ashby Application Page</title>
+</head>
+<body>
+  <div class="ashby-application-form-container">
+    <form class="ashby-job-posting-form" action="/submit" method="post" enctype="multipart/form-data">
+      <div class="field-container">
+        <label>Name</label>
+        <input type="text" name="name" required />
+      </div>
+      <div class="field-container">
+        <label>Email</label>
+        <input type="email" name="email" required />
+      </div>
+      <div class="field-container">
+        <label>Phone Number</label>
+        <input type="tel" name="phoneNumber" />
+      </div>
+      <div class="field-container">
+        <label>LinkedIn</label>
+        <input type="url" name="linkedIn" />
+      </div>
+      <div class="field-container">
+        <label>GitHub</label>
+        <input type="url" name="github" />
+      </div>
+      <div class="field-container">
+        <label>Website</label>
+        <input type="url" name="website" />
+      </div>
+      <div class="field-container">
+        <label>Resume</label>
+        <input type="file" accept=".pdf,.docx,.doc" />
+      </div>
+      <div class="submit-container">
+        <button type="submit" class="ashby-submit-button">Submit Application</button>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

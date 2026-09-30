@@ -72,7 +72,7 @@ def test_fresh_database_migration_v4(isolated_db):
         _run_schema_migrations_locked(conn)
 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 6, "user_version must be 6 after full migration"
+        assert version == 7, "user_version must be 7 after full migration"
 
         # Check applications columns
         app_cols = [r[1] for r in conn.execute("PRAGMA table_info(applications)").fetchall()]
@@ -264,3 +264,54 @@ def test_prompt_version_derivation():
     assert len(v2) == 8
     assert v1 != v2
     assert v1 == prompt_version(t1), "prompt_version must be deterministic for identical template"
+ 
+ 
+def test_migration_v7_location_free_dedup_key(isolated_db):
+    """
+    On a database with legacy location-keyed rows (same job in 2 cities had different keys),
+    running migration v7 updates both rows to share the exact same canonical dedup_key.
+    """
+    conn = sqlite3.connect(isolated_db)
+    _init_base_schema(conn)
+    _run_schema_migrations_locked(conn)  # Migrates to latest v7
+    
+    # Simulate legacy state: artificially set location-based keys and revert version to 6
+    conn.execute("PRAGMA user_version = 6")
+    legacy_key_ny = "legacy_key_ny123"
+    legacy_key_sf = "legacy_key_sf456"
+    
+    conn.execute("""
+        INSERT INTO applications (url, company, title, dedup_key, status)
+        VALUES ('https://example.com/job/ny', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'Applied')
+    """, (legacy_key_ny,))
+    conn.execute("""
+        INSERT INTO applications (url, company, title, dedup_key, status)
+        VALUES ('https://example.com/job/sf', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'Applied')
+    """, (legacy_key_sf,))
+    
+    conn.execute("""
+        INSERT INTO evaluations (url, company, title, dedup_key, route)
+        VALUES ('https://example.com/eval/ny', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'queue')
+    """, (legacy_key_ny,))
+    conn.execute("""
+        INSERT INTO evaluations (url, company, title, dedup_key, route)
+        VALUES ('https://example.com/eval/sf', 'NovaTech Solutions', 'Full Stack Engineer', ?, 'queue')
+    """, (legacy_key_sf,))
+    conn.commit()
+    
+    # Run migration v7
+    _run_schema_migrations_locked(conn)
+    
+    v = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert v == 7
+    
+    app_keys = [r[0] for r in conn.execute("SELECT dedup_key FROM applications WHERE company='NovaTech Solutions'").fetchall()]
+    assert len(app_keys) == 2
+    assert app_keys[0] == app_keys[1], "Both city applications must now share the exact same canonical dedup_key"
+    assert app_keys[0] == compute_dedup_key("NovaTech Solutions", "Full Stack Engineer")
+    
+    eval_keys = [r[0] for r in conn.execute("SELECT dedup_key FROM evaluations WHERE company='NovaTech Solutions'").fetchall()]
+    assert len(eval_keys) == 2
+    assert eval_keys[0] == eval_keys[1], "Both city evaluations must now share the exact same canonical dedup_key"
+    assert eval_keys[0] == compute_dedup_key("NovaTech Solutions", "Full Stack Engineer")
+    conn.close()

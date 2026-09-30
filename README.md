@@ -149,6 +149,10 @@ python -m venv venv
 # Install dependencies and browser drivers
 pip install -r requirements.txt
 playwright install chromium
+
+# IMPORTANT: Always execute evaluation and automation scripts using the virtual environment python:
+# Windows: .\venv\Scripts\python.exe <script.py>
+# System python often lacks dependencies (pypdf, sentence-transformers), which causes silent empty-resume degradation!
 ```
 
 #### macOS / Linux:

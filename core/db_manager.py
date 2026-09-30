@@ -7,7 +7,7 @@ import threading
 import re
 import hashlib
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 import core.state as state
 
 def normalize_jd(t: str) -> str:
@@ -42,12 +42,74 @@ def normalize_location(loc: str) -> str:
     return re.sub(r"[^a-z0-9]", "", loc)
 
 def compute_dedup_key(company: str, title: str, location: str = "") -> str:
-    """Canonical cross-platform job key: sha256(norm_company|norm_title|norm_loc)[:16]."""
+    """
+    Canonical cross-platform job key: sha256(norm_company|norm_title)[:16].
+    Location is deliberately omitted so multi-location postings of the same role
+    at the same company share an identical dedup key.
+    """
     norm_c = normalize_company(company)
     norm_t = re.sub(r'[^a-z0-9]', '', (title or "").lower())
-    norm_l = normalize_location(location)
-    raw = f"{norm_c}|{norm_t}|{norm_l}"
+    raw = f"{norm_c}|{norm_t}"
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]
+
+def _shingles(text: str, n: int = 5) -> set:
+    """Extract n-word shingles from normalized JD text for Jaccard similarity."""
+    w = re.findall(r"[a-z0-9+#.]+", normalize_jd(text))
+    if not w:
+        return set()
+    return {" ".join(w[i:i+n]) for i in range(max(len(w) - n + 1, 1))}
+
+def jd_similarity(a: str, b: str) -> float:
+    """Jaccard similarity between two texts based on word shingles."""
+    A, B = _shingles(a), _shingles(b)
+    if not A or not B:
+        return 0.0
+    return len(A & B) / max(len(A | B), 1)
+
+def is_suppressed(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90, sim: float = 0.85) -> bool:
+    """
+    Cross-platform 90-day suppression using shingle similarity (Jaccard >= sim).
+    Covers both past applications and past decisions (rejects).
+    Supports calling with or without an explicit sqlite3 connection:
+      is_suppressed(conn, company, title, jd_text, window_days, sim)
+      is_suppressed(company, title, jd_text, window_days, sim)
+    """
+    if isinstance(conn, str):
+        c = conn
+        t = company or ""
+        jd = title or ""
+        w_days = jd_text if isinstance(jd_text, int) else window_days
+        s_val = window_days if isinstance(window_days, (int, float)) and window_days <= 1.0 else sim
+        try:
+            with _get_connection() as direct_conn:
+                return is_suppressed(direct_conn, c, t, jd, window_days=w_days, sim=s_val)
+        except Exception:
+            return False
+
+    if conn is None:
+        try:
+            with _get_connection() as direct_conn:
+                return is_suppressed(direct_conn, company or "", title or "", jd_text or "", window_days=window_days, sim=sim)
+        except Exception:
+            return False
+
+    key = compute_dedup_key(company or "", title or "")
+    cutoff = (datetime.now() - timedelta(days=window_days)).isoformat()
+    cutoff_space = cutoff.replace("T", " ")
+    try:
+        rows = conn.execute("""
+            SELECT jd_text FROM applications WHERE dedup_key=? AND applied_at >= ?
+            UNION ALL
+            SELECT e.jd_text FROM decisions d JOIN evaluations e ON e.url = d.url
+            WHERE e.dedup_key=? AND d.decided_at >= ?""",
+            (key, cutoff, key, cutoff_space)).fetchall()
+        return any(jd_similarity(jd_text or "", r[0] or "") >= sim for r in rows)
+    except Exception:
+        return False
+
+def is_application_suppressed(company: str, title: str, content_hash: str | None = None, window_days: int = 90, jd_text: str = "") -> bool:
+    """Backward-compatible suppression check delegating to is_suppressed."""
+    return is_suppressed(None, company, title, jd_text, window_days=window_days)
 
 def compute_content_hash(text: str) -> str:
     """Normalized JD content hash to detect genuine revisions, ignoring dynamic scrape artifacts."""
@@ -395,6 +457,19 @@ def _run_schema_migrations_locked(conn):
             conn.execute("PRAGMA user_version = 6")
             conn.commit()
             print("[DB Migration] Schema migrated to version 6 (Application Packaging & Checkpointing).")
+
+        if v < 7:
+            for tbl in ("applications", "evaluations"):
+                try:
+                    for id_, c, t in conn.execute(f"SELECT id, company, title FROM {tbl}").fetchall():
+                        conn.execute(f"UPDATE {tbl} SET dedup_key=? WHERE id=?",
+                                     (compute_dedup_key(c or "", t or ""), id_))
+                except Exception as e:
+                    print(f"[DB Migration] Note migrating {tbl} to v7: {e}")
+
+            conn.execute("PRAGMA user_version = 7")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 7 (Canonical location-free dedup_key backfill).")
     except Exception as e:
         print(f"[DB Migration] Error running migrations: {e}")
 
@@ -1085,7 +1160,7 @@ def recalculate_metrics_unlocked():
                 status_str = status or ""
                 if status_str in [AppStatus.APPLIED, "Manual Approval Apply", "SUBMITTED"]:
                     applied += count
-                elif status_str in [AppStatus.REJECTED, "Skipped", "Manual User Disapproval", AppStatus.WITHDRAWN, "FAILED"]:
+                elif status_str in [AppStatus.REJECTED, "Skipped", "Manual User Disapproval", AppStatus.WITHDRAWN, "FAILED", "Auto-Archived"]:
                     skipped += count
                 elif status_str == "Suggested":
                     suggested += count

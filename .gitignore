@@ -20,8 +20,10 @@ screenshots/
 tailored_resumes/
 application_packages/
 eval/runs/
-eval/labels.jsonl
-eval/holdout_labels.jsonl
+eval/labels*.jsonl
+eval/labels*.json
+eval/holdout_labels*.jsonl
+eval/holdout_labels*.json
 *.log
 *.png
 *.jpg
