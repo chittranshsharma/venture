@@ -987,12 +987,13 @@ def apply_single_job_async(job):
     company = job.get("company", "")
     title = job.get("title", "")
     jd_text = job.get("jd_text") or job.get("description", "")
-    if suppression_verdict(None, company, title, jd_text) == "suppress":
+    url = job.get("url", "")
+    if suppression_verdict(None, company, title, jd_text, exclude_url=url) == "suppress":
         log_message(f"🚫 [SUPPRESSED] Refusing to apply to {company} - '{title}': recent application or rejection within 90 days.")
         return False
 
     async def process_apply_page(page, job):
-        if suppression_verdict(None, company, title, jd_text) == "suppress":
+        if suppression_verdict(None, company, title, jd_text, exclude_url=url) == "suppress":
             log_message(f"🚫 [SUPPRESSED] Refusing to apply to {company} - '{title}': recent application or rejection within 90 days.")
             return False
         log_message(f"APPLYING APPROVED JOB: {job['title']} at {job['company']}")

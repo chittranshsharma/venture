@@ -120,15 +120,18 @@ def can_transition(current: str, new_state: str) -> bool:
     """Check if state transition is legally allowed by FSM rules."""
     if not current:
         return True
-    if new_state in _ERROR_STATES:
+    current_canon = APP_STATUS_TO_FSM.get(current, current)
+    new_canon = APP_STATUS_TO_FSM.get(new_state, new_state)
+    if new_canon in _ERROR_STATES:
         return True
-    allowed = VALID_TRANSITIONS.get(current, [])
-    if not allowed and current.upper() in VALID_TRANSITIONS:
-        allowed = VALID_TRANSITIONS.get(current.upper(), [])
+    allowed = VALID_TRANSITIONS.get(current_canon, [])
+    if not allowed and current_canon.upper() in VALID_TRANSITIONS:
+        allowed = VALID_TRANSITIONS.get(current_canon.upper(), [])
     return (
-        new_state in allowed or
-        new_state.upper() in allowed or
-        new_state.capitalize() in allowed
+        new_canon in allowed or
+        new_canon.upper() in allowed or
+        new_canon.capitalize() in allowed or
+        new_state in allowed
     )
 
 
@@ -174,8 +177,9 @@ def transition(url: str, new_state: str, checkpoint: str = "", detail: str = "",
 
 
 def get_job_state(url: str) -> str:
-    """Return the current FSM state of a job URL from SQLite."""
-    return db.get_state(url) or ""
+    """Return the current canonical FSM state of a job URL from SQLite."""
+    st = db.get_state(url) or ""
+    return APP_STATUS_TO_FSM.get(st, st)
 
 
 def get_job_checkpoint(url: str) -> str:

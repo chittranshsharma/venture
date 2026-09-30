@@ -498,7 +498,7 @@ class SuggestionsView(ctk.CTkFrame):
         score = job.get("score", 70)
 
         from core.db_manager import suppression_verdict
-        verdict = suppression_verdict(None, company, role, job.get("description", ""))
+        verdict = suppression_verdict(None, company, role, job.get("description", ""), exclude_url=url)
         if verdict == "suppress":
             messagebox.showwarning(
                 "Suppressed Opportunity",

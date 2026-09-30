@@ -69,31 +69,42 @@ def jd_similarity(a: str, b: str) -> float:
 NO_SUPPRESS_REASONS = {"location"}  # only location-based rejects allow reposts
 BLOCK_REASONS = {"not_fit", "company", "seniority", "duplicate", "unsure", "other"}  # backward-compat
 
-def suppression_verdict(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90) -> str:
+# Statuses indicating an application was actually submitted or advanced (suppresses duplicate applications)
+APPLIED_STATUSES = (
+    "Applied", "Submitted", "SUBMITTED", "SUBMITTED_UNVERIFIED",
+    "Interview", "INTERVIEW", "Interviewing", "Offer", "OFFER",
+    "Offer Received", "Manual Approval Apply"
+)
+
+def suppression_verdict(conn=None, company: str = None, title: str = None, jd_text: str = None,
+                        window_days: int = 90, exclude_url: str = None) -> str:
     """
     Determine dedup suppression verdict: 'suppress' | 'flag' | 'pass'.
     - suppress: High confidence duplicate (similarity >= 0.85).
     - flag: Moderate match (0.5 <= sim < 0.85) or text too short (<200 chars) to reliably distinguish.
     - pass: Distinct job, or past rejection was due to location constraints (NO_SUPPRESS_REASONS).
+    Checks applied_at cutoff and filters applications strictly by APPLIED_STATUSES, ignoring exclude_url.
     Supports calling with or without explicit connection:
-      suppression_verdict(conn, company, title, jd_text, window_days)
-      suppression_verdict(company, title, jd_text, window_days)
+      suppression_verdict(conn, company, title, jd_text, window_days=window_days, exclude_url=exclude_url)
+      suppression_verdict(company, title, jd_text, window_days=window_days, exclude_url=exclude_url)
     """
     if isinstance(conn, str):
         c = conn
         t = company or ""
         jd = title or ""
         w_days = jd_text if isinstance(jd_text, int) else window_days
+        ex_url = exclude_url
         try:
             with _get_connection() as direct_conn:
-                return suppression_verdict(direct_conn, c, t, jd, window_days=w_days)
+                return suppression_verdict(direct_conn, c, t, jd, window_days=w_days, exclude_url=ex_url)
         except Exception:
             return "pass"
 
     if conn is None:
         try:
             with _get_connection() as direct_conn:
-                return suppression_verdict(direct_conn, company or "", title or "", jd_text or "", window_days=window_days)
+                return suppression_verdict(direct_conn, company or "", title or "", jd_text or "",
+                                           window_days=window_days, exclude_url=exclude_url)
         except Exception:
             return "pass"
 
@@ -101,14 +112,24 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
     cutoff = (datetime.now() - timedelta(days=window_days)).isoformat()
     cutoff_space = cutoff.replace("T", " ")
     try:
-        rows = conn.execute("""
+        placeholders = ",".join("?" for _ in APPLIED_STATUSES)
+        # suppression query: filter applied applications by status and applied_at while ignoring exclude_url
+        q = f"""
             SELECT jd_text, 'applied', NULL FROM applications
               WHERE dedup_key=? AND applied_at >= ?
+                AND status IN ({placeholders})
+                AND (? IS NULL OR url != ?)
             UNION ALL
             SELECT e.jd_text, 'rejected', d.reject_reason FROM decisions d
               JOIN evaluations e ON e.url = d.url
-              WHERE e.dedup_key=? AND d.label='reject' AND (d.decided_at >= ? OR d.decided_at >= ?)""",
-            (key, cutoff, key, cutoff, cutoff_space)).fetchall()
+              WHERE e.dedup_key=? AND d.label='reject' AND (d.decided_at >= ? OR d.decided_at >= ?)
+                AND (? IS NULL OR d.url != ?)
+        """
+        args = (
+            key, cutoff, *APPLIED_STATUSES, exclude_url, exclude_url,
+            key, cutoff, cutoff_space, exclude_url, exclude_url
+        )
+        rows = conn.execute(q, args).fetchall()
         verdict = "pass"
         for prior, kind, reason in rows:
             if kind == "rejected" and reason in NO_SUPPRESS_REASONS:
@@ -126,13 +147,15 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
     except Exception:
         return "pass"
 
-def is_suppressed(conn=None, company: str = None, title: str = None, jd_text: str = None, window_days: int = 90, sim: float = 0.85) -> bool:
+def is_suppressed(conn=None, company: str = None, title: str = None, jd_text: str = None,
+                  window_days: int = 90, sim: float = 0.85, exclude_url: str = None) -> bool:
     """Convenience boolean check: True if suppression_verdict is 'suppress'."""
-    return suppression_verdict(conn, company, title, jd_text, window_days=window_days) == "suppress"
+    return suppression_verdict(conn, company, title, jd_text, window_days=window_days, exclude_url=exclude_url) == "suppress"
 
-def is_application_suppressed(company: str, title: str, content_hash: str | None = None, window_days: int = 90, jd_text: str = "") -> bool:
+def is_application_suppressed(company: str, title: str, content_hash: str | None = None,
+                              window_days: int = 90, jd_text: str = "", exclude_url: str = None) -> bool:
     """Backward-compatible suppression check delegating to suppression_verdict."""
-    return is_suppressed(None, company, title, jd_text, window_days=window_days)
+    return is_suppressed(None, company, title, jd_text, window_days=window_days, exclude_url=exclude_url)
 
 def get_archived_evaluations() -> list:
     """Retrieve all blocked opportunities from evaluations table (route='blocked_title')."""

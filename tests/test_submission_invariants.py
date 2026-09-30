@@ -553,3 +553,79 @@ def test_apply_single_job_async_on_suppressed_job_aborts(clean_db):
     assert applied is False, "apply_single_job_async must abort on suppressed job"
 
 
+class FakeAdapter:
+    platform_name = "greenhouse"
+
+    async def inspect(self, page):
+        return {}
+
+    async def fill(self, page, package=None, profile=None):
+        return True
+
+    async def validate(self, page):
+        return {"valid": True, "missing_required": []}
+
+    async def submit(self, page, dry_run=False):
+        return True
+
+    def verify_success(self, page):
+        return True
+
+
+def test_approved_job_is_not_self_suppressed(clean_db):
+    """
+    An approved job in 'Approval Needed' or 'Approved' status must not suppress itself at submission.
+    execute_ats_submission must succeed and reach SUBMITTED state.
+    Second city variant after real submit must be suppressed.
+    """
+    from automation.orchestrator import process_job, approve, execute_ats_submission
+
+    url = "https://boards.greenhouse.io/stripe/swe-1"
+    company = "Stripe"
+    title = "Backend Infrastructure Engineer"
+    jd = (
+        "Stripe is hiring a Backend Infrastructure Engineer to scale our distributed payment gateway. "
+        "You will design high-throughput microservices using Python, Go, and PostgreSQL. "
+        "Requires 4+ years building reliable fault-tolerant systems and automated testing with CI/CD. "
+        "Collaborate with security and reliability engineers to ensure compliance and fault recovery."
+    )
+    job = {
+        "url": url,
+        "title": title,
+        "company": company,
+        "platform": "Greenhouse",
+        "jd_text": jd,
+    }
+
+    # 1. Process job (creates applications row with 'Approval Needed')
+    res = process_job(job, dry_run=False)
+    assert res.state == JobState.READY_FOR_APPROVAL
+
+    # 2. Human approves job
+    approve(url)
+    assert get_job_state(url) == JobState.APPROVED
+
+    # 3. Submit approved job with FakeAdapter
+    async def _run():
+        out = await execute_ats_submission(job, adapter=FakeAdapter(), dry_run=False)
+        assert out.state in ("SUBMITTED", "SUBMITTED_UNVERIFIED")
+        assert get_job_state(url) in (JobState.SUBMITTED, JobState.SUBMITTED_UNVERIFIED)
+
+    asyncio.run(_run())
+
+    # 4. A second city variant of the same job after real submit MUST be suppressed
+    url_city2 = "https://boards.greenhouse.io/stripe/swe-2"
+    jd_city2 = f"{jd} Location: Seattle, WA. Relocation support available."
+    job_city2 = {
+        "url": url_city2,
+        "title": title,
+        "company": company,
+        "platform": "Greenhouse",
+        "jd_text": jd_city2,
+    }
+    res_city2 = process_job(job_city2, dry_run=False)
+    assert res_city2.route == "suppressed", f"Second city variant must be suppressed after submit; got route {res_city2.route}"
+    assert res_city2.state == JobState.REJECTED
+
+
+
