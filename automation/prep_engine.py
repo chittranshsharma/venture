@@ -55,24 +55,24 @@ def _generate_cover_letter(
 ) -> str:
     """Generate a clean, targeted 3-paragraph cover letter using real candidate credentials."""
     name = candidate.get("name", "Applicant")
-    skills_phrase = ", ".join(matched_skills[:4]) if matched_skills else "software engineering and system design"
-    bullet_snippet = top_bullets[0] if top_bullets else "built scalable systems and robust full-stack applications"
+    known_skills = {str(skill).casefold() for skill in candidate.get("skills", [])}
+    grounded_skills = [skill for skill in matched_skills if str(skill).casefold() in known_skills]
+    skills_phrase = ", ".join(grounded_skills[:4])
+    bullet_snippet = top_bullets[0] if top_bullets else ""
 
     p1 = (
         f"Dear Hiring Team at {company},\n\n"
-        f"I am writing to express my strong interest in the {title} position. With hands-on experience in "
-        f"{skills_phrase}, I have developed high-performance applications and reliable backend architectures "
-        f"that closely match the challenges outlined for this role."
+        f"I am applying for the {title} position. "
+        + (f"My profile includes {skills_phrase}." if skills_phrase else "Please find my resume attached for your review.")
     )
 
     p2 = (
-        f"In my previous work, I have focused on delivering practical engineering impact: {bullet_snippet}. "
-        f"I specialize in writing clean, well-tested code, streamlining deployment workflows, and collaborating "
-        f"cross-functionally to take complex features from technical design through production."
+        f"A relevant excerpt from my resume: {bullet_snippet}"
+        if bullet_snippet else "My resume provides details of my education, projects, and experience."
     )
 
     p3 = (
-        f"I welcome the opportunity to discuss how my technical skills in {skills_phrase} can contribute to "
+        f"I welcome the opportunity to discuss how I can contribute to "
         f"{company}'s engineering objectives. Thank you for your time and consideration.\n\n"
         f"Sincerely,\n{name}\n"
         f"Email: {candidate.get('email', '')} | Phone: {candidate.get('phone', '')}\n"
@@ -98,15 +98,15 @@ def _build_form_answers(candidate: Dict[str, Any], qa_vault: Dict[str, Any]) -> 
         "linkedin": candidate.get("linkedin", ""),
         "github": candidate.get("github", ""),
         "portfolio": candidate.get("portfolio", "") or candidate.get("website", ""),
-        "years_of_experience": str(qa_vault.get("experience_years", candidate.get("experience_years", 1))),
-        "work_authorization": qa_vault.get("work_authorization", "Authorized to work in country of residence"),
-        "sponsorship_required": qa_vault.get("sponsorship_required", "No"),
-        "notice_period": qa_vault.get("notice_period", "Immediate / 15 days"),
+        "years_of_experience": str(qa_vault.get("experience_years", candidate.get("experience_years", ""))),
+        "work_authorization": qa_vault.get("work_authorization", ""),
+        "sponsorship_required": qa_vault.get("sponsorship_required", qa_vault.get("require_sponsorship", "")),
+        "notice_period": qa_vault.get("notice_period", ""),
         "current_salary": qa_vault.get("current_salary", ""),
         "expected_salary": qa_vault.get("expected_salary", ""),
-        "gender": qa_vault.get("gender", "Decline to Self-Identify"),
-        "veteran_status": qa_vault.get("veteran_status", "Decline to Self-Identify"),
-        "disability_status": qa_vault.get("disability_status", "Decline to Self-Identify"),
+        "gender": qa_vault.get("gender", ""),
+        "veteran_status": qa_vault.get("veteran_status", ""),
+        "disability_status": qa_vault.get("disability_status", ""),
     }
 
 
@@ -129,20 +129,27 @@ def resolve_form_question(
     # Work Authorization
     if re.search(r"\b(legally authorized|work authorization|authorized to work|eligible to work|legal right to work)\b", q):
         val = qa_vault.get("work_authorization")
+        if isinstance(val, bool):
+            val = "Yes" if val else "No"
         return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
 
     # Visa Sponsorship
     if re.search(r"\b(visa sponsorship|require sponsorship|require.*visa|future sponsorship)\b", q):
-        val = qa_vault.get("sponsorship_required") or qa_vault.get("require_sponsorship")
+        val = next((v for v in (qa_vault.get("sponsorship_required"), qa_vault.get("require_sponsorship"))
+                    if v is not None and str(v).strip()), None)
+        if isinstance(val, bool):
+            val = "Yes" if val else "No"
         return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
 
     # Salary / Compensation / CTC
     if re.search(r"\b(expected salary|desired salary|expected compensation|expected ctc|desired ctc|salary expectation)\b", q):
-        val = qa_vault.get("expected_ctc") or qa_vault.get("expected_salary") or qa_vault.get("expected_stipend")
+        val = next((v for v in (qa_vault.get("expected_ctc"), qa_vault.get("expected_salary"), qa_vault.get("expected_stipend"))
+                    if v is not None and str(v).strip()), None)
         return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
 
     if re.search(r"\b(current salary|current ctc|current compensation)\b", q):
-        val = qa_vault.get("current_ctc") or qa_vault.get("current_salary")
+        val = next((v for v in (qa_vault.get("current_ctc"), qa_vault.get("current_salary"))
+                    if v is not None and str(v).strip()), None)
         return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
 
     # Notice Period
@@ -152,7 +159,8 @@ def resolve_form_question(
 
     # Experience
     if re.search(r"\b(years of experience|total experience|how many years.*experience)\b", q):
-        val = qa_vault.get("experience_years") or candidate.get("experience_years")
+        val = next((v for v in (qa_vault.get("experience_years"), candidate.get("experience_years"))
+                    if v is not None and str(v).strip()), None)
         return (str(val), "VAULT_MATCH") if val is not None else (None, "NEEDS_HUMAN")
 
     # Relocation
@@ -205,12 +213,42 @@ def resolve_form_question(
     return (None, "NEEDS_HUMAN")
 
 
+def load_application_package(package_dir: str, url: str) -> ApplicationPackage:
+    """Reload the approved snapshot, refusing manifests or files belonging to another job."""
+    directory = os.path.realpath(package_dir)
+    packages_root = os.path.realpath(PACKAGES_DIR)
+    if os.path.commonpath([directory, packages_root]) != packages_root or directory == packages_root:
+        raise ValueError("Package path must be inside application_packages.")
+    manifest_path = os.path.join(directory, "manifest.json")
+    with open(manifest_path, encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    if manifest.get("url") != url:
+        raise ValueError("Application package belongs to a different job. Prepare it again before approval.")
+    for key in ("cover_letter_path", "form_answers_path"):
+        path = os.path.realpath(manifest[key])
+        if os.path.commonpath([path, directory]) != directory:
+            raise ValueError("Package artifact is outside its directory.")
+    with open(manifest["form_answers_path"], encoding="utf-8") as stream:
+        answers = json.load(stream)
+    with open(manifest["cover_letter_path"], encoding="utf-8") as stream:
+        cover = stream.read()
+    version = f"v{manifest['package_version']}"
+    return ApplicationPackage(
+        dedup_key=manifest["dedup_key"], package_dir=directory, resume_path=manifest["resume_path"],
+        resume_version=version, cover_letter_path=manifest["cover_letter_path"], cover_letter_version=version,
+        form_answers_path=manifest["form_answers_path"], answers_version=version, manifest_path=manifest_path,
+        created_at=manifest["created_at"], evaluation_snapshot=manifest.get("evaluation_snapshot", {}),
+        job_snapshot=manifest.get("job_snapshot", {}), form_answers=answers, cover_letter_text=cover,
+    )
+
+
 def prepare_application_package(
     job: Dict[str, Any],
     signals: Any = None,
     llm_evidence: Optional[Dict[str, Any]] = None,
     cfg: Optional[Dict[str, Any]] = None,
-    version: int = 1
+    version: int = 1,
+    persist: bool = True,
 ) -> ApplicationPackage:
     """
     Assembles, versions, and saves a reproducible application package for an opportunity.
@@ -224,6 +262,8 @@ def prepare_application_package(
     desc = job.get("description") or job.get("jd_text", "")
 
     dk = job.get("dedup_key") or db.compute_dedup_key(company, title)
+    if not re.fullmatch(r"[0-9a-f]{16}", dk):
+        raise ValueError("Invalid application package key.")
     package_dir = os.path.join(PACKAGES_DIR, dk)
     os.makedirs(package_dir, exist_ok=True)
 
@@ -241,6 +281,8 @@ def prepare_application_package(
         matched_skills = llm_evidence["strengths"]
     else:
         matched_skills = cand.get("skills", [])[:5]
+    known_skills = {str(skill).casefold() for skill in cand.get("skills", [])}
+    matched_skills = [skill for skill in matched_skills if str(skill).casefold() in known_skills]
 
     # 2. Versioned Plaintext & PDF Resume
     resume_ver = f"v{version}"
@@ -300,7 +342,7 @@ def prepare_application_package(
         json.dump(manifest_data, f, indent=2)
 
     # Link to SQLite DB
-    if url:
+    if url and persist:
         db.update_application_package(
             url=url,
             package_path=package_dir,

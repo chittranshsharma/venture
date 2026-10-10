@@ -4,6 +4,7 @@ Falls back to in-memory cache if keyring is unavailable.
 Passwords are never stored as plaintext in config.json.
 """
 import os
+import logging
 
 # Service name used to namespace credentials in the OS keyring
 _SERVICE_NAME = "VENTURE"
@@ -21,6 +22,10 @@ except Exception:
 _mem_cache = {}
 
 
+class CredentialStoreError(RuntimeError):
+    """A credential could not be durably stored in the OS keyring."""
+
+
 def store_credential(key, value):
     """Store a credential securely. Key format: 'accounts.naukri_pass', 'smtp.password', etc."""
     if _keyring_available:
@@ -33,11 +38,15 @@ def store_credential(key, value):
                     keyring.delete_password(_SERVICE_NAME, key)
                 except keyring.errors.PasswordDeleteError:
                     pass
-            return
-        except Exception:
-            pass
+            _mem_cache.pop(key, None)
+            return True
+        except Exception as exc:
+            raise CredentialStoreError(f"Secure storage failed for {key}. No credentials were erased from config.") from exc
     # Fallback to in-memory
-    _mem_cache[key] = value
+    if value:
+        raise CredentialStoreError("OS keyring is unavailable. Configure secure storage before saving credentials.")
+    _mem_cache.pop(key, None)
+    return True
 
 
 def get_credential(key, fallback=""):
@@ -76,7 +85,11 @@ def migrate_plaintext_credentials(config):
         if section in config and key in config[section]:
             val = config[section][key]
             if val:  # Only migrate non-empty values
-                store_credential(store_key, val)
+                try:
+                    store_credential(store_key, val)
+                except CredentialStoreError:
+                    logging.getLogger(__name__).warning("Credential migration deferred for %s: secure store unavailable.", store_key)
+                    continue
                 config[section][key] = ""  # Blank out from config
                 migrated = True
 

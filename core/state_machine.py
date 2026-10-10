@@ -50,14 +50,14 @@ VALID_TRANSITIONS: Dict[str, List[str]] = {
     "EXECUTING":            ["SUBMITTED", "SUBMITTED_UNVERIFIED", "FAILED", "RETRYABLE", "RESUME_UPLOADED", "FIELDS_FILLED"],
     "FORM_OPENED":          ["EXECUTING", "RESUME_UPLOADED", "FIELDS_FILLED", "FAILED"],
     "RESUME_UPLOADED":      ["EXECUTING", "FIELDS_FILLED", "FAILED"],
-    "FIELDS_FILLED":        ["SUBMITTED", "SUBMITTED_UNVERIFIED", "RETRYABLE", "FAILED"],
+    "FIELDS_FILLED":        ["APPROVED", "SUBMITTED", "SUBMITTED_UNVERIFIED", "RETRYABLE", "FAILED"],
     "SUBMITTED":            ["INTERVIEW", "OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
     "SUBMITTED_UNVERIFIED": ["SUBMITTED", "INTERVIEW", "OFFER", "GHOSTED", "REJECTED", "FAILED"],
     "INTERVIEW":            ["OFFER", "GHOSTED", "REJECTED", "REJECTED_POST", "FAILED"],
     "OFFER":                ["REJECTED", "SUBMITTED"],
     "GHOSTED":              ["INTERVIEW", "OFFER", "REJECTED"],
     "FAILED":               ["RETRYABLE", "NEEDS_RETRY", "EXECUTING", "PREPARING", "APPROVED"],
-    "RETRYABLE":            ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
+    "RETRYABLE":            ["APPROVED", "EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
     "NEEDS_RETRY":          ["EXECUTING", "PREPARING", "FORM_OPENED", "FAILED"],
     "REJECTED":             ["DISCOVERED", "EVALUATED"],  # can re-evaluate on genuine JD revisions
     "REJECTED_POST":        ["INTERVIEW", "OFFER", "FAILED"],
@@ -66,7 +66,7 @@ VALID_TRANSITIONS: Dict[str, List[str]] = {
 _ERROR_STATES = {"FAILED", "RETRYABLE", "NEEDS_RETRY"}
 
 _TERMINAL_REAPPLICATION_STATES = {
-    "SUBMITTED", "INTERVIEW", "OFFER", "REJECTED_POST", "REJECTED", "GHOSTED",
+    "SUBMITTED", "SUBMITTED_UNVERIFIED", "INTERVIEW", "OFFER", "REJECTED_POST", "REJECTED", "GHOSTED",
     "Applied", "Rejected", "Withdrawn", "Offer", "Offer Received",
     "Interview", "Interviewing", "Manual Approval Apply",
 }
@@ -122,9 +122,11 @@ APP_STATUS_TO_FSM = {
 def can_transition(current: str, new_state: str) -> bool:
     """Check if state transition is legally allowed by FSM rules."""
     if not current:
-        return True
+        return new_state == JobState.DISCOVERED
     current_canon = APP_STATUS_TO_FSM.get(current, current)
     new_canon = APP_STATUS_TO_FSM.get(new_state, new_state)
+    if current_canon == new_canon:
+        return True
     if new_canon in _ERROR_STATES:
         return True
     allowed = VALID_TRANSITIONS.get(current_canon, [])
@@ -166,16 +168,22 @@ def transition(url: str, new_state: str, checkpoint: str = "", detail: str = "",
     Atomically transition an application to a new state and checkpoint in SQLite.
     Raises IllegalStateTransitionError if strict=True and transition is illegal.
     """
-    current = db.get_state(url)
-    if current and not can_transition(current, new_state):
-        msg = f"Illegal FSM state jump: cannot transition '{current}' -> '{new_state}'"
-        db.log_message(f"FSM Error: {msg}")
-        if strict:
-            raise IllegalStateTransitionError(msg)
-    
-    db.update_state(url, new_state, detail=detail)
-    if checkpoint:
-        db.set_checkpoint(url, checkpoint)
+    if not url:
+        raise ValueError("Application URL is required.")
+    with db.DB_LOCK, db._get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT status FROM applications WHERE url=?", (url,)).fetchone()
+        current = row[0] if row else ""
+        if strict and not can_transition(current, new_state):
+            raise IllegalStateTransitionError(f"Illegal FSM state jump: cannot transition '{current}' -> '{new_state}'")
+        now = db.datetime.now().isoformat()
+        conn.execute("""INSERT INTO applications (url, status, reason, applied_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?) ON CONFLICT(url) DO UPDATE SET
+                        status=excluded.status, reason=CASE WHEN excluded.reason != ''
+                        THEN excluded.reason ELSE applications.reason END, updated_at=excluded.updated_at""",
+                     (url, new_state, detail, now, now))
+        if checkpoint:
+            conn.execute("UPDATE applications SET checkpoint=? WHERE url=?", (checkpoint, url))
     db.log_message(f"FSM [{url[:35]}]: {current or 'INIT'} -> {new_state} (chk={checkpoint or 'none'})")
 
 
@@ -223,9 +231,8 @@ def get_interrupted_executions() -> List[Dict[str, Any]]:
                 cursor.execute("""
                     SELECT id, url, title, company, status, checkpoint, package_path, updated_at
                     FROM applications
-                    WHERE status IN ('Applying', 'Approved', 'Preparing')
-                       OR (checkpoint NOT IN ('discovered', 'submitted', 'hard_block_rejected', 'low_fit_rejected', 'ready_for_approval')
-                           AND status NOT IN ('Applied', 'Rejected', 'Skipped', 'Withdrawn'))
+                    WHERE status IN ('Applying', 'Approved', 'Preparing', 'EXECUTING', 'APPROVED',
+                                     'PREPARING', 'RETRYABLE', 'FIELDS_FILLED')
                     ORDER BY id DESC
                 """)
                 rows = cursor.fetchall()

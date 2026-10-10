@@ -28,7 +28,8 @@ async def check_pause():
 async def check_safety_limit():
     safe_mode = CONFIG.get("settings", {}).get("safe_mode", True)
     daily_cap = CONFIG.get("settings", {}).get("daily_apply_cap", 25)
-    applied_today = state.SESSION_STATS.get("applied_today", 0)
+    from core.db_manager import get_daily_apply_count
+    applied_today = get_daily_apply_count()
     
     if safe_mode and applied_today >= daily_cap:
         log_message(f"🛡️ SAFETY LIMIT REACHED: Reached daily application cap ({applied_today}/{daily_cap}). Pausing bot to protect your platform account.")
@@ -228,7 +229,8 @@ async def apply_to_url(page, job_url, job=None, profile=None):
         profile = CONFIG.get("candidate", {})
     if job is None:
         job = {"url": job_url}
-    return await execute_ats_submission(page, job, profile=profile)
+    return await execute_ats_submission(page, job, profile=profile,
+                                        dry_run=CONFIG.get("settings", {}).get("dry_run_mode", True))
 
 
 async def process_job_evaluation(title, company, href, desc_text, platform, desc_page, browser):
@@ -275,7 +277,7 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
     }
 
     # Authoritative flow: normalize -> dedup -> constraints -> free signals -> composite score -> selective LLM -> package prep
-    result = await asyncio.to_thread(process_job, job_data, CONFIG)
+    result = await asyncio.to_thread(process_job, job_data, CONFIG, dry_run=False)
 
     if result.state == JobState.REJECTED or result.route in ["reject", "constraint", "completed"]:
         return False
@@ -285,197 +287,10 @@ async def process_job_evaluation(title, company, href, desc_text, platform, desc
         from core.notifier import notify
         notify("JobPilot — Strong Match", f"{title} at {company} ({score}%)")
 
-    settings = CONFIG.get("settings", {})
-    safe_mode = settings.get("safe_mode", True)
-    dry_run_mode = settings.get("dry_run_mode", True)
-    require_approval = settings.get("require_approval", True)
-
-    can_auto_approve = (
-        safe_mode is False
-        and dry_run_mode is False
-        and require_approval is False
-        and result.route == "queue"
-        and not result.is_stretch
-        and score >= 85
-    )
-    if not can_auto_approve:
-        return True
-
     # Auto-apply opt-in path (only if safe_mode=False, dry_run=False, require_approval=False, route=queue, and score >= 85)
-    try:
-        transition(href, JobState.APPROVED)
-    except Exception:
-        pass
-            
-        sc_path = os.path.join(SCREENSHOTS_DIR, f"{platform.lower()}_match_{random.randint(1000, 9999)}.png")
-        try:
-            await desc_page.screenshot(path=sc_path)
-        except Exception as e:
-            log_message(f"Could not take screenshot: {e}")
-            
-        if platform == "Indeed":
-            apply_btn = desc_page.locator("button:has-text('Apply now'), button:has-text('Apply with Indeed')")
-            external_apply = desc_page.locator("a:has-text('Apply on company site')")
-            
-            if await apply_btn.count() > 0:
-                log_message(f"Indeed MATCH FOUND ({score}%): {title} at {company}. Initiating Easy Apply...")
-                await apply_btn.first.click()
-                try:
-                    transition(href, JobState.FORM_OPENED)
-                except Exception:
-                    pass
-                await asyncio.sleep(3)
-                has_doubts = False
-                try:
-                    await auto_fill_playwright_form(desc_page, job_title=title, company=company, job_url=href, platform="Indeed")
-                    # Check if any form doubts were added
-                    with state.DOUBT_LOCK:
-                        has_doubts = any(d.get("type") == "form_question" and d.get("url") == href for d in state.DOUBT_QUEUE)
-                except Exception as e:
-                    log_message(f"Auto-fill error: {e}")
-                await wait_for_manual_submission(desc_page, has_doubts=has_doubts)
-                save_to_db(href, title, company, "Indeed", "Applied")
-                from core.notifier import notify
-                notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
-            elif await external_apply.count() > 0:
-                career_url = await external_apply.first.get_attribute("href")
-                log_message(f"External Career Page detected for {title} at {company}: {career_url}")
-                applied = False
-                try:
-                    async with desc_page.context.expect_page(timeout=5000) as new_page_info:
-                        await external_apply.first.click()
-                    ext_page = await new_page_info.value
-                    await asyncio.sleep(2)
-                    applied = await apply_to_url(ext_page, ext_page.url, {"title": title, "company": company, "url": career_url}, CONFIG.get("candidate", {}))
-                    if applied:
-                        save_to_db(href, title, company, "Indeed", "Applied", f"Applied via ATS ({ext_page.url})")
-                        log_message(f"Indeed: Applied to external ATS ({ext_page.url})")
-                        from core.notifier import notify
-                        notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
-                    else:
-                        save_to_db(href, title, company, "Indeed", "Suggested", f"Career Page: {career_url}")
-                    await ext_page.close()
-                except Exception:
-                    save_to_db(href, title, company, "Indeed", "Suggested", f"Career Page: {career_url}")
-            elif email_matches:
-                company_email = email_matches[0]
-                log_message(f"SUGGESTED: Email Application for {title} at {company}: {company_email}")
-                save_to_db(href, title, company, "Indeed", "Suggested", f"Email resume to: {company_email}")
-            else:
-                save_to_db(href, title, company, "Indeed", "Suggested", "Apply manually")
-                
-        elif platform == "Naukri":
-            apply_btn = desc_page.locator("button:has-text('Apply'), button#apply-button, .apply-button")
-            if await apply_btn.count() > 0:
-                log_message(f"Naukri MATCH FOUND ({score}%): {title} at {company}. Clicking Apply...")
-                
-                async def click_and_detect():
-                    async with desc_page.context.expect_page(timeout=5000) as new_page_info:
-                        await apply_btn.first.click()
-                    new_p = await new_page_info.value
-                    return new_p
-                    
-                try:
-                    new_tab = await click_and_detect()
-                    await asyncio.sleep(2)
-                    redirect_url = new_tab.url
-                    log_message(f"Naukri click opened external company site: {redirect_url}")
-                    applied = await apply_to_url(new_tab, redirect_url, {"title": title, "company": company, "url": redirect_url}, CONFIG.get("candidate", {}))
-                    if applied:
-                        save_to_db(href, title, company, "Naukri", "Applied", f"Applied via ATS ({redirect_url})")
-                        log_message(f"Naukri: Applied to external ATS ({redirect_url})")
-                        from core.notifier import notify
-                        notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
-                    else:
-                        save_to_db(href, title, company, "Naukri", "Suggested", f"Career Page: {redirect_url}")
-                    await new_tab.close()
-                except Exception:
-                    # Fallback if no new page opens (inline redirection or standard modal)
-                    await asyncio.sleep(3)
-                    try:
-                        current_url = desc_page.url
-                        if "naukri.com" not in current_url:
-                            log_message(f"Naukri redirected page to external career site: {current_url}")
-                            applied = await apply_to_url(desc_page, current_url, {"title": title, "company": company, "url": current_url}, CONFIG.get("candidate", {}))
-                            if applied:
-                                save_to_db(href, title, company, "Naukri", "Applied", f"Applied via ATS ({current_url})")
-                            else:
-                                save_to_db(href, title, company, "Naukri", "Suggested", f"Career Page: {current_url}")
-                        else:
-                            has_doubts = False
-                            try:
-                                await auto_fill_playwright_form(desc_page, job_title=title, company=company, job_url=href, platform="Naukri")
-                                with state.DOUBT_LOCK:
-                                    has_doubts = any(d.get("type") == "form_question" and d.get("url") == href for d in state.DOUBT_QUEUE)
-                            except Exception as e:
-                                log_message(f"Auto-fill error: {e}")
-                            await wait_for_manual_submission(desc_page, has_doubts=has_doubts)
-                            save_to_db(href, title, company, "Naukri", "Applied")
-                            from core.notifier import notify
-                            notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
-                    except Exception:
-                        pass
-            elif email_matches:
-                company_email = email_matches[0]
-                log_message(f"SUGGESTED: Email Application for {title} at {company}: {company_email}")
-                save_to_db(href, title, company, "Naukri", "Suggested", f"Email resume to: {company_email}")
-            else:
-                save_to_db(href, title, company, "Naukri", "Suggested", "Apply manually")
-                
-        elif platform == "LinkedIn":
-            easy_apply_btn = desc_page.locator("button.jobs-apply-button:has-text('Easy Apply'), button:has-text('Easy Apply'), button[aria-label*='Easy Apply']")
-            apply_btn = desc_page.locator("button.jobs-apply-button, button:has-text('Apply'), a:has-text('Apply')")
-            
-            if await easy_apply_btn.count() > 0:
-                log_message(f"LinkedIn MATCH FOUND ({score}%): {title} at {company}. Clicking Easy Apply...")
-                await easy_apply_btn.first.click()
-                try:
-                    transition(href, JobState.FORM_OPENED)
-                except Exception:
-                    pass
-                await asyncio.sleep(3)
-                has_doubts = False
-                try:
-                    await auto_fill_playwright_form(desc_page, job_title=title, company=company, job_url=href, platform="LinkedIn")
-                    with state.DOUBT_LOCK:
-                        has_doubts = any(d.get("type") == "form_question" and d.get("url") == href for d in state.DOUBT_QUEUE)
-                except Exception as e:
-                    log_message(f"Auto-fill error: {e}")
-                await wait_for_manual_submission(desc_page, has_doubts=has_doubts)
-                save_to_db(href, title, company, "LinkedIn", "Applied")
-                from core.notifier import notify
-                notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
-            elif await apply_btn.count() > 0:
-                # Click standard apply and capture redirect
-                async def click_and_detect():
-                    async with desc_page.context.expect_page(timeout=5000) as new_page_info:
-                        await apply_btn.first.click()
-                    new_p = await new_page_info.value
-                    return new_p
-                try:
-                    new_tab = await click_and_detect()
-                    await asyncio.sleep(2)
-                    redirect_url = new_tab.url
-                    log_message(f"LinkedIn apply opened career link: {redirect_url}")
-                    applied = await apply_to_url(new_tab, redirect_url, {"title": title, "company": company, "url": redirect_url}, CONFIG.get("candidate", {}))
-                    if applied:
-                        save_to_db(href, title, company, "LinkedIn", "Applied", f"Applied via ATS ({redirect_url})")
-                        log_message(f"LinkedIn: Applied to external ATS ({redirect_url})")
-                        from core.notifier import notify
-                        notify("JobPilot — Applied", f"Submitted application: {title} at {company}")
-                    else:
-                        save_to_db(href, title, company, "LinkedIn", "Suggested", f"Career Page: {redirect_url}")
-                    await new_tab.close()
-                except Exception:
-                    log_message(f"SUGGESTED: External Apply for {title} at {company}")
-                    save_to_db(href, title, company, "LinkedIn", "Suggested", f"Career Link: {href}")
-            elif email_matches:
-                company_email = email_matches[0]
-                log_message(f"SUGGESTED: Email Application for {title} at {company}: {company_email}")
-                save_to_db(href, title, company, "LinkedIn", "Suggested", f"Email resume to: {company_email}")
-            else:
-                save_to_db(href, title, company, "LinkedIn", "Suggested", "Apply manually")
-        return True
+    if result.state == JobState.APPROVED:
+        apply_single_job_async(job_data)
+    return True
 
 
 
@@ -982,7 +797,7 @@ def stop_bot():
     state.BOT_RUNNING = False
     log_message("Stop command triggered.")
 
-def apply_single_job_async(job):
+def apply_single_job_async(job, confirm_submit=None):
     from core.db_manager import suppression_verdict
     company = job.get("company", "")
     title = job.get("title", "")
@@ -992,52 +807,24 @@ def apply_single_job_async(job):
         log_message(f"🚫 [SUPPRESSED] Refusing to apply to {company} - '{title}': recent application or rejection within 90 days.")
         return False
 
+    from core.db_manager import get_application
+    from automation.prep_engine import load_application_package
+    snapshot = get_application(url)
+    dry_run = CONFIG.get("settings", {}).get("dry_run_mode", True)
+    if not dry_run and get_job_state(url) != JobState.APPROVED:
+        log_message("Application not dispatched: explicit approval is required.")
+        return False
+
     async def process_apply_page(page, job):
-        if suppression_verdict(None, company, title, jd_text, exclude_url=url) == "suppress":
-            log_message(f"🚫 [SUPPRESSED] Refusing to apply to {company} - '{title}': recent application or rejection within 90 days.")
-            return False
-        log_message(f"APPLYING APPROVED JOB: {job['title']} at {job['company']}")
-        url = job.get("url", "")
-
-        # Check for specialist ATS adapters (Greenhouse, Lever, Ashby)
-        from automation.specialists.registry import get_ats_adapter
-        adapter = get_ats_adapter(url)
-        if adapter.platform_name in ["greenhouse", "lever", "ashby"]:
-            log_message(f"ATS Specialist Adapter: Handling application via {adapter.platform_name} adapter...")
-            await goto_with_retry(page, url)
-            await asyncio.sleep(2)
-            return await execute_ats_submission(page, job, profile=CONFIG.get("candidate", {}))
-
-        await goto_with_retry(page, job["url"])
-        await asyncio.sleep(3)
-        
-        # Verify platform auth if login wall/button appears
-        platform = job.get("platform", "")
-        if platform == "Naukri":
-            if await page.locator("a#login_Layer").count() > 0 or "nlogin/login" in page.url:
-                await verify_naukri_auth(page)
-        elif platform == "Indeed":
-            if await page.locator("a:has-text('Sign in')").count() > 0 or "secure.indeed.com" in page.url:
-                await verify_indeed_auth(page)
-        elif platform == "LinkedIn":
-            if "feed" not in page.url and await page.locator("#username, #session_key").count() > 0:
-                await verify_linkedin_auth(page)
-                
-        apply_btn = page.locator("button:has-text('Apply now'), button:has-text('Apply with Indeed'), button:has-text('Apply'), button#apply-button, button.jobs-apply-button:has-text('Easy Apply')")
-        if await apply_btn.count() > 0:
-            log_message(f"Found apply button for {job['title']}. Clicking Apply...")
-            await apply_btn.first.click()
-            await asyncio.sleep(3)
-            try:
-                await auto_fill_playwright_form(page, job_title=job.get("title", ""), company=job.get("company", ""), job_url=job.get("url", ""), platform=platform)
-            except Exception as e:
-                log_message(f"Auto-fill error: {e}")
-            updated = update_job_status_in_csv(job["url"], "Approval Needed", "Applied", "Manual Approval Apply")
-            if not updated:
-                save_to_db(job["url"], job["title"], job["company"], platform, "Applied", "Manual Approval Apply")
-        else:
-            log_message("Apply button not found on page. Please apply manually in the opened tab.")
-            await asyncio.sleep(30)
+        log_message(f"Preparing approved job: {title} at {company}")
+        await goto_with_retry(page, url)
+        package = None
+        if snapshot.get("package_path"):
+            package = load_application_package(snapshot["package_path"], url)
+        return await execute_ats_submission(
+            page, job, package=package, profile=CONFIG.get("candidate", {}),
+            dry_run=dry_run, confirm_submit=confirm_submit,
+        )
 
     def apply_thread():
         # Case 1: Main bot is running — reuse active logged-in browser context!
@@ -1054,7 +841,8 @@ def apply_single_job_async(job):
                 future.result()
                 return
             except Exception as e:
-                log_message(f"Active context apply error: {e}. Falling back to standalone persistent session...")
+                log_message(f"Active context apply stopped: {e}. Review state before retrying.")
+                return
 
         # Case 2: Main bot is idle — launch persistent Edge profile context containing user login cookies!
         loop = asyncio.new_event_loop()
@@ -1082,3 +870,4 @@ def apply_single_job_async(job):
         loop.close()
         
     threading.Thread(target=apply_thread, daemon=True).start()
+    return True

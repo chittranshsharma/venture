@@ -45,14 +45,14 @@ class SuggestionsView(ctk.CTkFrame):
         title_box.pack(side='left', anchor='w')
 
         lbl_title = ctk.CTkLabel(
-            title_box, text="OPPORTUNITIES",
-            font=("Segoe UI", 16, "bold"), text_color=C["text"], anchor="w"
+            title_box, text="Opportunities",
+            font=F["h1"], text_color=C["text"], anchor="w"
         )
         lbl_title.pack(anchor='w')
 
         lbl_sub = ctk.CTkLabel(
             title_box,
-            text="Autonomous career intelligence · Evaluated against your profile & curriculum",
+            text="A considered shortlist for your next move.",
             font=F["xs"], text_color=C["tertiary"], anchor="w"
         )
         lbl_sub.pack(anchor='w', pady=(2, 0))
@@ -75,7 +75,7 @@ class SuggestionsView(ctk.CTkFrame):
             placeholder_text="Search opportunities...",
             fg_color=C["input"], border_color=C["border"],
             text_color=C["text"], font=F["xs"],
-            width=220, height=30, corner_radius=6, border_width=1
+            width=280, height=38, corner_radius=8, border_width=1
         )
         search_entry.pack(side='left', padx=(0, 10))
         self.search_var.trace_add("write", lambda *args: self.apply_filters())
@@ -86,7 +86,7 @@ class SuggestionsView(ctk.CTkFrame):
         for f_name in filters:
             btn = ctk.CTkButton(
                 toolbar, text=f_name,
-                font=F["xs"], height=28, width=0,
+                font=F["xs"], height=34, width=76,
                 corner_radius=4, border_width=1, cursor="hand2",
                 command=lambda fn=f_name: self.set_filter(fn)
             )
@@ -164,7 +164,7 @@ class SuggestionsView(ctk.CTkFrame):
             # Tab filter
             if self.current_filter == "High Fit" and score < min_score:
                 continue
-            elif self.current_filter == "Remote" and "remote" not in title and "remote" not in company:
+            elif self.current_filter == "Remote" and "remote" not in (title + " " + str(job.get("location", "")).lower()):
                 continue
             elif self.current_filter == "New" and job.get("status") not in ("Suggested", "New", None):
                 continue
@@ -179,38 +179,18 @@ class SuggestionsView(ctk.CTkFrame):
     def load_suggestions_table(self):
         try:
             records = get_suggested_jobs()
-            candidate_skills = CONFIG.get("candidate", {}).get("skills", ["Python", "FastAPI", "React", "PostgreSQL", "Docker"])
-
             # Augment records with rich metadata if not yet evaluated
-            augmented = []
-            for r in records:
-                score = r.get("score", 0)
-                role = r.get("role", "Software Engineer")
-                company = r.get("company", "Tech Co")
-
-                # If score is minimal pre-filter baseline (10), compute smart normalized match
-                if score <= 15:
-                    role_lower = role.lower()
-                    matched_skills = [s for s in candidate_skills if s.lower() in role_lower]
-                    if not matched_skills:
-                        matched_skills = candidate_skills[:4]
-                    score = min(96, max(74, 70 + (len(matched_skills) * 6)))
-                    r["score"] = score
-                    if not r.get("strengths"):
-                        r["strengths"] = matched_skills
-                elif not r.get("strengths"):
-                    r["strengths"] = candidate_skills[:4]
-
-                # Location inference
-                r["location"] = "Remote" if "remote" in role.lower() else "Bangalore · Gurgaon"
-                augmented.append(r)
-
-            self.all_jobs = augmented
+            self.all_jobs = records
             self.apply_filters()
 
             # Auto-select the top match if none selected
-            if self.filtered_jobs and not self.selected_job:
+            if self.filtered_jobs and (not self.selected_job or not any(
+                j.get("url") == self.selected_job.get("url") for j in self.filtered_jobs
+            )):
                 self.select_opportunity(self.filtered_jobs[0])
+            elif not self.filtered_jobs:
+                self.selected_job = None
+                self._render_empty_detail_panel()
 
         except Exception as e:
             log_message(f"Suggestions load error: {e}")
@@ -243,7 +223,7 @@ class SuggestionsView(ctk.CTkFrame):
         card.pack(fill='x', pady=(0, 8))
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill='x', padx=16, pady=14)
+        inner.pack(fill='x', padx=20, pady=18)
 
         # ── Card Row 1: Score Badge + Title + Company ──
         row1 = ctk.CTkFrame(inner, fg_color="transparent")
@@ -254,7 +234,7 @@ class SuggestionsView(ctk.CTkFrame):
 
         score_lbl = ctk.CTkLabel(
             row1, text=f"{score}%",
-            font=("Segoe UI", 16, "bold"), text_color=score_col,
+            font=F["h2"], text_color=score_col,
             width=50, anchor="w"
         )
         score_lbl.pack(side='left', anchor='n')
@@ -264,13 +244,13 @@ class SuggestionsView(ctk.CTkFrame):
 
         title_lbl = ctk.CTkLabel(
             info_box, text=job.get("role", "Engineering Role"),
-            font=("Segoe UI", 13, "bold"), text_color=C["text"], anchor="w"
+            font=F["sm_b"], text_color=C["text"], anchor="w", justify="left", wraplength=320
         )
         title_lbl.pack(anchor='w')
 
         comp_lbl = ctk.CTkLabel(
-            info_box, text=f"{job.get('company', 'Company')} · {job.get('location', 'Remote')}",
-            font=F["xs"], text_color=C["secondary"], anchor="w"
+            info_box, text=f"{job.get('company', 'Company')} · {job.get('location') or 'Location not recorded'}",
+            font=F["xs"], text_color=C["secondary"], anchor="w", justify="left", wraplength=320
         )
         comp_lbl.pack(anchor='w', pady=(2, 0))
 
@@ -290,8 +270,7 @@ class SuggestionsView(ctk.CTkFrame):
         row3 = ctk.CTkFrame(inner, fg_color="transparent")
         row3.pack(fill='x', pady=(10, 0))
 
-        req_skills_count = max(len(skills), 6)
-        match_desc = f"{len(skills)} / {req_skills_count} required skills · Strong semantic match" if score >= 70 else "Baseline match · Evaluation complete"
+        match_desc = f"{len(skills)} recorded matches" if skills else "Review required"
 
         ctk.CTkLabel(
             row3, text=match_desc,
@@ -329,7 +308,7 @@ class SuggestionsView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             empty_box,
-            text="Inspect semantic matching vectors, resume\nevidence, and application strategy.",
+            text="Choose a role to review its fit\nand plan your next step.",
             font=F["xs"], text_color=C["secondary"], justify="center"
         ).pack()
 
@@ -341,14 +320,14 @@ class SuggestionsView(ctk.CTkFrame):
         container.pack(fill='both', expand=True, padx=16, pady=16)
 
         # ── Header ──
-        role = job.get("role", "Role").upper()
+        role = job.get("role", "Role")
         company = job.get("company", "Company")
         platform = job.get("platform", "Platform")
         score = job.get("score", 70)
 
         lbl_head_role = ctk.CTkLabel(
             container, text=role,
-            font=("Segoe UI", 14, "bold"), text_color=C["text"], anchor="w"
+            font=F["h2"], text_color=C["text"], anchor="w", justify="left", wraplength=340
         )
         lbl_head_role.pack(anchor='w')
 
@@ -367,36 +346,25 @@ class SuggestionsView(ctk.CTkFrame):
         score_pill.pack(anchor='w', pady=(0, 14))
 
         # ── Section 1: Why VENTURE matched this ──
-        self._add_drawer_divider(container, "Why VENTURE matched this")
+        self._add_drawer_divider(container, "Recorded matches")
 
-        skills = job.get("strengths", []) or ["Python", "FastAPI", "PostgreSQL", "AWS"]
-        skill_scores = [98, 91, 89, 81, 76]
+        skills = job.get("strengths", [])
 
         for idx, skill in enumerate(skills[:4]):
-            sk_score = skill_scores[idx % len(skill_scores)]
             row_sk = ctk.CTkFrame(container, fg_color="transparent")
             row_sk.pack(fill='x', pady=3)
 
             ctk.CTkLabel(
-                row_sk, text=skill,
-                font=F["xs"], text_color=C["text"], width=90, anchor="w"
+                row_sk, text=f"•  {skill}",
+                font=F["sm"], text_color=C["body"], anchor="w", justify="left", wraplength=340
             ).pack(side='left')
 
-            # Visual progress bar
-            pb = ctk.CTkProgressBar(
-                row_sk, height=6, corner_radius=2,
-                fg_color=C["deep"], progress_color=C["accent"]
-            )
-            pb.set(sk_score / 100.0)
-            pb.pack(side='left', fill='x', expand=True, padx=10)
-
-            ctk.CTkLabel(
-                row_sk, text=f"{sk_score}%",
-                font=F["mono_sm"], text_color=C["secondary"], width=35, anchor="e"
-            ).pack(side='right')
+        if not skills:
+            ctk.CTkLabel(container, text="No match evidence recorded yet.",
+                         font=F["sm"], text_color=C["secondary"]).pack(anchor='w', pady=4)
 
         # ── Section 2: Resume evidence ──
-        self._add_drawer_divider(container, "Resume evidence")
+        self._add_drawer_divider(container, "Your resume · excerpt")
 
         evidence_frame = ctk.CTkFrame(
             container, fg_color=C["deep"], corner_radius=6,
@@ -405,31 +373,31 @@ class SuggestionsView(ctk.CTkFrame):
         evidence_frame.pack(fill='x', pady=(4, 10))
 
         # Dynamically pull resume evidence or profile bullets
-        resume_text = extract_resume_text()
+        try:
+            resume_text = extract_resume_text()
+        except Exception:
+            resume_text = ""
         bullets = []
         if resume_text:
             lines = [l.strip() for l in resume_text.split('\n') if len(l.strip()) > 30]
             bullets = lines[:2]
         if not bullets:
-            bullets = [
-                f"Built scalable microservices and robust API backends utilizing {skills[0] if skills else 'Python'}.",
-                f"Engineered resilient data pipelines and persistent storage schemas with PostgreSQL."
-            ]
+            bullets = ["Add a readable PDF in your profile to see your resume here."]
 
         for b in bullets:
             ctk.CTkLabel(
-                evidence_frame, text=f'"{b[:120]}..."',
+                evidence_frame, text=b[:240] + ("…" if len(b) > 240 else ""),
                 font=F["xs"], text_color=C["secondary"],
                 anchor="w", justify="left", wraplength=340
             ).pack(anchor='w', padx=10, pady=6)
 
         # ── Section 3: Application strategy ──
-        self._add_drawer_divider(container, "Application strategy")
+        self._add_drawer_divider(container, "Next steps")
 
         strat_items = [
-            ("Resume",   "Verified curriculum PDF ready"),
-            ("Cover",    "Auto-tailored draft generated"),
-            ("Outreach", "Recruiter direct pipeline armed"),
+            ("Review",   "Check the role on the company website"),
+            ("Prepare",  "Draft a tailored cover letter"),
+            ("Approve",  "Review before submitting"),
         ]
         for key, desc in strat_items:
             s_row = ctk.CTkFrame(container, fg_color="transparent")
@@ -441,13 +409,8 @@ class SuggestionsView(ctk.CTkFrame):
             ).pack(side='left')
 
             ctk.CTkLabel(
-                s_row, text="█",
-                font=("Segoe UI", 8), text_color=C["green"], width=14
-            ).pack(side='left')
-
-            ctk.CTkLabel(
                 s_row, text=f" {desc}",
-                font=F["xs"], text_color=C["tertiary"], anchor="w"
+                font=F["xs"], text_color=C["tertiary"], anchor="w", justify="left", wraplength=250
             ).pack(side='left')
 
         # ── Action Buttons ──
@@ -461,21 +424,21 @@ class SuggestionsView(ctk.CTkFrame):
             lambda: self.request_approval_action(job),
             "primary", "normal"
         )
-        btn_appr.pack(side='left', padx=(0, 6))
+        btn_appr.pack(fill='x', pady=(0, 8))
 
         btn_url = create_action_btn(
-            actions_box, "Open URL ↗",
+            actions_box, "View job posting",
             lambda: self.open_job_link(job),
             "ghost", "normal"
         )
-        btn_url.pack(side='left', padx=(0, 6))
+        btn_url.pack(fill='x', pady=(0, 8))
 
         btn_tailor = create_action_btn(
-            actions_box, "Tailor Cover",
+            actions_box, "Draft cover letter",
             lambda: self.generate_cover_action(job),
             "ghost", "normal"
         )
-        btn_tailor.pack(side='left')
+        btn_tailor.pack(fill='x')
 
     def _add_drawer_divider(self, parent, title):
         div_frame = ctk.CTkFrame(parent, fg_color="transparent")

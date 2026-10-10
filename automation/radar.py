@@ -99,7 +99,7 @@ class RadarAgent:
                             else:
                                 try:
                                     from automation.orchestrator import process_job
-                                    process_job(job)
+                                    process_job(job, dry_run=False)
                                 except Exception as p_err:
                                     log_message(f"Radar pipeline processing error: {p_err}")
                 except Exception as e:
@@ -132,7 +132,7 @@ class RadarAgent:
                             else:
                                 try:
                                     from automation.orchestrator import process_job
-                                    process_job(job)
+                                    process_job(job, dry_run=False)
                                 except Exception as p_err:
                                     log_message(f"Career page processing error: {p_err}")
                 except Exception as e:

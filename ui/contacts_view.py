@@ -26,9 +26,9 @@ class ContactsView(ctk.CTkFrame):
         title_box = ctk.CTkFrame(title_row, fg_color="transparent")
         title_box.pack(side='left', anchor='w')
         
-        lbl_title = ctk.CTkLabel(title_box, text="Recruiter Contacts & Outreach", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title = ctk.CTkLabel(title_box, text="Recruiters", font=F["h1"], text_color=C["ink"], anchor="w")
         lbl_title.pack(anchor='w')
-        lbl_sub = ctk.CTkLabel(title_box, text="Direct hiring manager intelligence and verified outreach channels.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub = ctk.CTkLabel(title_box, text="Keep useful connections close.", font=F["xs"], text_color=C["ash"], anchor="w")
         lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # Search Entry
@@ -60,7 +60,7 @@ class ContactsView(ctk.CTkFrame):
         left_card.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
         
         columns = ('company', 'role', 'hr_name', 'email', 'phone')
-        self.contacts_tree = ttk.Treeview(left_card, columns=columns, show='headings', style="Dark.Treeview")
+        self.contacts_tree = ttk.Treeview(left_card, columns=columns, displaycolumns=('company', 'role', 'hr_name'), show='headings', style="Dark.Treeview")
         self.contacts_tree.heading('company', text='Company')
         self.contacts_tree.heading('role', text='Role')
         self.contacts_tree.heading('hr_name', text='HR / Recruiter')
@@ -92,7 +92,7 @@ class ContactsView(ctk.CTkFrame):
         self.lbl_company_role = ctk.CTkLabel(self.right_card, text="Select a Recruiter Contact", font=F["h2"], text_color=C["ink"], anchor="w")
         self.lbl_company_role.pack(anchor='w', padx=14, pady=(14, 2))
         
-        self.lbl_hr_name = ctk.CTkLabel(self.right_card, text="Discovered via autonomous ATS job scan", font=F["xs"], text_color=C["ash"], anchor="w")
+        self.lbl_hr_name = ctk.CTkLabel(self.right_card, text="Select a contact to review details and draft a message.", font=F["xs"], text_color=C["ash"], anchor="w", wraplength=360, justify="left")
         self.lbl_hr_name.pack(anchor='w', padx=14, pady=(0, 14))
         
         # Action Box 1: WhatsApp & Phone
@@ -108,10 +108,10 @@ class ContactsView(ctk.CTkFrame):
         btn_phone_row = ctk.CTkFrame(self.action_box, fg_color="transparent")
         btn_phone_row.pack(fill='x', padx=12, pady=(0, 10))
         
-        self.btn_whatsapp = create_action_btn(btn_phone_row, "💬 Open WhatsApp Chat", self.open_whatsapp, "ghost", "small")
+        self.btn_whatsapp = create_action_btn(btn_phone_row, "WhatsApp", self.open_whatsapp, "ghost", "small")
         self.btn_whatsapp.pack(side='left', padx=(0, 8))
         
-        self.btn_copy_phone = create_action_btn(btn_phone_row, "📞 Copy Number", self.copy_phone, "ghost", "small")
+        self.btn_copy_phone = create_action_btn(btn_phone_row, "Copy number", self.copy_phone, "ghost", "small")
         self.btn_copy_phone.pack(side='left')
 
         # Action Box 2: Direct Email
@@ -127,14 +127,14 @@ class ContactsView(ctk.CTkFrame):
         btn_email_row = ctk.CTkFrame(self.email_box, fg_color="transparent")
         btn_email_row.pack(fill='x', padx=12, pady=(0, 10))
         
-        self.btn_send_smtp = create_action_btn(btn_email_row, "✉ Send Direct Email", self.send_direct_email, "primary", "small")
+        self.btn_send_smtp = create_action_btn(btn_email_row, "Send email", self.send_direct_email, "primary", "small")
         self.btn_send_smtp.pack(side='left', padx=(0, 8))
         
-        self.btn_copy_email = create_action_btn(btn_email_row, "📋 Copy Email", self.copy_email, "ghost", "small")
+        self.btn_copy_email = create_action_btn(btn_email_row, "Copy email", self.copy_email, "ghost", "small")
         self.btn_copy_email.pack(side='left')
 
         # Action Box 3: Cover Letter Preview
-        lbl_draft_title = ctk.CTkLabel(self.right_card, text="Tailored Cold Email / Outreach Pitch", font=F["h3"], text_color=C["ink"], anchor="w")
+        lbl_draft_title = ctk.CTkLabel(self.right_card, text="Message draft", font=F["h3"], text_color=C["ink"], anchor="w")
         lbl_draft_title.pack(anchor='w', padx=14, pady=(8, 6))
         
         draft_inner = ctk.CTkFrame(

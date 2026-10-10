@@ -72,7 +72,7 @@ def test_fresh_database_migration_full(isolated_db):
         _run_schema_migrations_locked(conn)
 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 7, "user_version must be 7 after full migration"
+        assert version == 8, "user_version must be 8 after full migration"
 
         # Check applications columns
         app_cols = [r[1] for r in conn.execute("PRAGMA table_info(applications)").fetchall()]
@@ -88,12 +88,14 @@ def test_fresh_database_migration_full(isolated_db):
         assert "decision_reason" in app_cols
         assert "checkpoint" in app_cols
         assert "package_path" in app_cols
+        assert "submitted_at" in app_cols
 
         # Check tables exist
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         assert "processed_emails" in tables
         assert "decisions" in tables
         assert "evaluations" in tables
+        assert "submission_attempts" in tables
 
         # Check evaluations columns including embedding_model
         eval_cols = [r[1] for r in conn.execute("PRAGMA table_info(evaluations)").fetchall()]
@@ -303,7 +305,7 @@ def test_migration_v7_location_free_dedup_key(isolated_db):
     _run_schema_migrations_locked(conn)
     
     v = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert v == 7
+    assert v == 8
     
     app_keys = [r[0] for r in conn.execute("SELECT dedup_key FROM applications WHERE company='NovaTech Solutions'").fetchall()]
     assert len(app_keys) == 2
@@ -331,7 +333,7 @@ def test_upgrade_from_intermediate_version_to_v7(isolated_db, start_version):
     # Re-run migration
     _run_schema_migrations_locked(conn)
     final_v = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert final_v == 7, f"Migration from version {start_version} must reach user_version 7"
+    assert final_v == 8, f"Migration from version {start_version} must reach user_version 8"
     conn.close()
 
 

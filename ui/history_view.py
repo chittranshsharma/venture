@@ -27,9 +27,9 @@ class HistoryView(ctk.CTkFrame):
         title_box = ctk.CTkFrame(title_row, fg_color="transparent")
         title_box.pack(side='left', anchor='w')
         
-        lbl_title = ctk.CTkLabel(title_box, text="Application History", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title = ctk.CTkLabel(title_box, text="Applications", font=F["h1"], text_color=C["ink"], anchor="w")
         lbl_title.pack(anchor='w')
-        lbl_sub = ctk.CTkLabel(title_box, text="Persistent SQLite application record and lifecycle state tracker.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub = ctk.CTkLabel(title_box, text="Every application. Every next step.", font=F["xs"], text_color=C["ash"], anchor="w")
         lbl_sub.pack(anchor='w', pady=(2, 0))
         
         btn_frame = ctk.CTkFrame(title_row, fg_color="transparent")
@@ -76,6 +76,7 @@ class HistoryView(ctk.CTkFrame):
         self.tree.tag_configure('withdrawn', foreground=C["ash"])
         self.tree.tag_configure('rejected', foreground=C["red"])
         self.tree.tag_configure('applied', foreground=C["body"])
+        self.tree.tag_configure('unverified', foreground=C["amber"])
         
         scrollbar = ttk.Scrollbar(card, orient="vertical", command=self.tree.yview, style="Dark.Vertical.TScrollbar")
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -171,7 +172,9 @@ class HistoryView(ctk.CTkFrame):
                 # P2.2 Color coding: Blue for Interview, Green for Offer, Dimmed Gray for Withdrawn, Red for Rejected
                 tag = "applied"
                 status_lower = status.lower()
-                if "interview" in status_lower:
+                if "unverified" in status_lower:
+                    tag = "unverified"
+                elif "interview" in status_lower:
                     tag = "interview"
                 elif "offer" in status_lower:
                     tag = "offer"

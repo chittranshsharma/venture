@@ -273,12 +273,14 @@ venture/
 
 ---
 
-## 🔒 Security & Privacy Guarantees
+## 🔒 Security & Privacy
 
-- **100% Local Confidentiality**: In Local Ollama mode, your resume content, job search queries, and personal data never leave your workstation.
-- **Hardware-Encrypted Credentials**: Passwords and private API tokens are saved in secure OS Keyring storage, never plain text.
-- **AST Sandboxing**: Dynamically generated ATS specialists undergo abstract syntax tree validation and security scanning against forbidden patterns (`os.system`, `subprocess`, `eval`, `exec`) before execution.
-- **Native User Session Protection**: Uses your local browser profile to avoid triggering automated bot detection signals.
+- **Local AI option**: Ollama processes model requests locally. Job portals, SMTP, cloud AI, and model downloads may still require external connections.
+- **OS credential storage**: New secrets must persist in the OS keyring. If migration of an old plaintext config fails, the original value is preserved and a warning is logged.
+- **Generated code checks**: Static AST validation checks generated specialists for forbidden patterns. This is not a security sandbox.
+- **Browser sessions**: Uses your local browser profile. Rate limits reduce traffic but do not guarantee that a job board will accept automation.
+
+See [Backend safety and operations](docs/BACKEND_SAFETY.md) for submission safeguards, audit commands, backups, and test instructions.
 
 ---
 

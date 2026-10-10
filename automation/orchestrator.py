@@ -106,6 +106,19 @@ def process_job(
             checkpoint=chk, telemetry={"dedup_key": dk, "content_hash": ch}
         )
 
+    if url:
+        snapshot = db.get_application(url)
+        current = get_job_state(url)
+        if current in (JobState.READY_FOR_APPROVAL, JobState.APPROVED, JobState.EXECUTING,
+                       JobState.FIELDS_FILLED, JobState.RETRYABLE, JobState.PREPARING):
+            db.log_message(f"Discovery preserved existing application ({current}): {url}")
+            return JobLifecycleResult(
+                url=url, title=title, company=company, state=current, score=snapshot.get("score") or 0,
+                route="pending", is_stretch=False, rejection_reason=None, package=None,
+                decision_reason="Existing application awaits review or execution; discovery did not reset it.",
+                checkpoint=snapshot.get("checkpoint") or "discovered", telemetry={"dedup_key": dk, "content_hash": ch},
+            )
+
     verdict = db.suppression_verdict(None, company, title, desc_text, exclude_url=url)
     if verdict == "suppress":
         db.log_message(f"Dedup Suppression: Job '{title}' at '{company}' already applied or rejected within 90 days.")
@@ -252,7 +265,12 @@ def process_job(
     if auto_prepare:
         if url and not dry_run:
             transition(url, JobState.PREPARING, checkpoint="preparing_package")
-        pkg = prepare_application_package(job, signals=signals, llm_evidence=llm_res, cfg=cfg)
+        try:
+            pkg = prepare_application_package(job, signals=signals, llm_evidence=llm_res, cfg=cfg, persist=not dry_run)
+        except Exception as exc:
+            if url and not dry_run:
+                transition(url, JobState.RETRYABLE, checkpoint="package_failed", detail=str(exc))
+            raise
         if url and not dry_run:
             transition(url, JobState.READY_FOR_APPROVAL, checkpoint="ready_for_approval")
 
@@ -346,30 +364,36 @@ def approve(url: str):
     return transition(url, JobState.APPROVED, checkpoint="human_approved")
 
 
-def _human_gate(page: Any, url: str, cfg: Dict[str, Any]) -> bool:
-    """Supervised confirmation gate: screenshots filled form and awaits operator approval."""
+async def _human_gate(page: Any, url: str, cfg: Dict[str, Any], confirm_submit=None) -> bool:
+    """Await the review screenshot and explicit operator confirmation; never approve on EOF."""
     if not cfg.get("settings", {}).get("confirm_before_submit", True):
         return True
-    import os, time, inspect, asyncio
-    os.makedirs("screenshots", exist_ok=True)
-    shot = f"screenshots/pre_submit_{int(time.time())}.png"
-    if hasattr(page, "screenshot"):
+    import inspect
+    import os
+    import uuid
+    from core.config_manager import SCREENSHOTS_DIR
+    os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+    shot = os.path.join(SCREENSHOTS_DIR, f"pre_submit_{uuid.uuid4().hex}.png")
+    if page is not None and hasattr(page, "screenshot"):
         try:
-            res = page.screenshot(path=shot, full_page=True)
-            if inspect.isawaitable(res):
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(res)
-                except RuntimeError:
-                    asyncio.run(res)
+            result = page.screenshot(path=shot, full_page=True)
+            if inspect.isawaitable(result):
+                await result
         except Exception:
-            pass
-    print(f"\n[SUPERVISED] Form filled for {url}\nScreenshot: {shot}")
+            db.log_message("Pre-submit screenshot failed. Submission paused for review.")
+            return False
     try:
-        ans = input("Type SUBMIT to send, anything else aborts: ").strip()
-    except (EOFError, OSError):
-        ans = "SUBMIT"
-    return ans == "SUBMIT"
+        if confirm_submit is not None:
+            answer = await asyncio.to_thread(confirm_submit, url, shot)
+            if inspect.isawaitable(answer):
+                answer = await answer
+            return answer is True
+        db.log_message(f"Review screenshot before submission: {shot}")
+        answer = await asyncio.to_thread(input, f"Form ready for {url}. Type SUBMIT to send: ")
+        return answer.strip() == "SUBMIT"
+    except (EOFError, OSError, TimeoutError):
+        db.log_message("No operator confirmation available. Submission aborted.")
+        return False
 
 
 async def execute_ats_submission(
@@ -378,125 +402,125 @@ async def execute_ats_submission(
     package: Optional[ApplicationPackage] = None,
     profile: Optional[Dict[str, Any]] = None,
     dry_run: bool = True,
-    adapter: Any = None
-) -> Any:
+    adapter: Any = None,
+    confirm_submit=None,
+) -> SubmissionResult:
     """
     Executes ATS submission using the specialist adapter framework.
     Safety Invariants:
-    1. submit() reachable only from state APPROVED (or EXECUTING if resuming from checkpoint).
-    2. Explore-route jobs never submit without explicit human approval click.
+    1. submit() reachable only from an approved, atomically reserved application.
+    2. Explore-route jobs never submit without explicit human approval.
     3. Suppressed duplicate jobs must never be submitted (ignoring self URL).
-    4. daily_apply_cap strictly enforced from DB before execution.
-    5. Explicit dry_run defaults to True to prevent accidental live submissions.
-    6. After submission: confirms success indicator, else sets SUBMITTED_UNVERIFIED.
+    4. daily_apply_cap includes active reservations across app instances.
+    5. Dry runs never invoke the final submit action or persist a submitted state.
+    6. An uncertain click is SUBMITTED_UNVERIFIED and cannot be automatically retried.
     """
     # Flexibility: allow calling execute_ats_submission(job, adapter=...)
-    called_with_dict = isinstance(page, dict)
-    if called_with_dict and (job is None or isinstance(job, bool)):
+    if isinstance(page, dict) and (job is None or isinstance(job, bool)):
         if isinstance(job, bool):
             dry_run = job
-        job = page
-        from unittest.mock import MagicMock
-        page = MagicMock()
-
-    if profile is None:
-        profile = CONFIG.get("candidate", {})
-
-    url = job.get("url", "")
+        job, page = page, None
+    if not isinstance(job, dict) or not job.get("url"):
+        raise ValueError("A job with a URL is required.")
+    if not isinstance(dry_run, bool):
+        raise ValueError("dry_run must be True or False.")
+    if adapter is None and page is None:
+        raise ValueError("A browser page is required for ATS execution.")
+    profile = profile if profile is not None else CONFIG.get("candidate", {})
+    url = job["url"]
     title = job.get("title", "")
     company = job.get("company", "")
 
     # Invariant 1: submit() reachable ONLY from state APPROVED or EXECUTING (resumption)
-    current_state = get_job_state(url) if url else ""
-    if current_state and current_state not in (JobState.APPROVED, JobState.EXECUTING):
-        raise AssertionError(
-            f"Security Invariant Violated: Submission attempted on job in state '{current_state}'. "
-            f"Jobs MUST be in 'APPROVED' or 'EXECUTING' state before submission can occur."
-        )
+    current_state = get_job_state(url)
+    if (current_state and current_state not in (JobState.APPROVED, JobState.EXECUTING)) or (not dry_run and not current_state):
+        raise AssertionError(f"Submission requires an approved job; current state is '{current_state or 'missing'}'.")
 
     # Invariant 2: Explore-route jobs cannot be submitted without explicit human approval
-    route = job.get("route") or (package.evaluation_snapshot.get("route") if package else None)
-    approval_label = job.get("approval_label", "")
-    if route == "explore" and approval_label not in ("apply", "approved") and current_state != JobState.APPROVED:
-        raise AssertionError(
-            f"Security Invariant Violated: Explore-route job '{title}' @ '{company}' "
-            f"cannot be submitted without explicit human approval click."
-        )
+    route = job.get("route") or job.get("source") or (package.evaluation_snapshot.get("route") if package else None)
+    if route == "explore" and current_state != JobState.APPROVED and job.get("approval_label") not in ("approve", "approved", "apply"):
+        raise AssertionError("Explore-route jobs require explicit human approval.")
 
     # Invariant 3: Suppressed duplicate jobs must never be submitted (ignoring self URL)
     desc = job.get("jd_text") or job.get("description", "")
     if db.suppression_verdict(None, company, title, desc, exclude_url=url) == "suppress":
-        raise AssertionError(
-            f"Security Invariant Violated: Submission attempted on suppressed duplicate job '{title}' @ '{company}'."
-        )
+        raise AssertionError("Cannot submit a suppressed duplicate application.")
 
     # Invariant 4: Daily Apply Cap enforced from DB count before execution
-    settings = CONFIG.get("settings", {})
-    daily_cap = settings.get("daily_apply_cap", 25)
-    today_applied = db.get_daily_apply_count()
-    if today_applied >= daily_cap and not dry_run:
-        db.log_message(f"Daily application cap ({daily_cap}) reached ({today_applied} today). Aborting submission.")
-        return SubmissionResult(False, state=current_state, verified=False)
+    token = None
+    if not dry_run:
+        try:
+            token = db.reserve_submission(url, CONFIG.get("settings", {}).get("daily_apply_cap", 25))
+        except db.SubmissionBlockedError as exc:
+            db.log_message(f"Submission blocked: {exc}")
+            return SubmissionResult(False, state=current_state)
 
-    if url and not dry_run:
-        transition(url, JobState.EXECUTING, checkpoint="detecting_adapter")
+    clicked = False
+    try:
+        if adapter is None:
+            adapter = get_ats_adapter(page.url)
+        platform_name = getattr(adapter, "platform_name", "ats")
+        db.log_message(f"ATS Execution: {platform_name} for {url[:80]}")
+        if package is None:
+            from types import SimpleNamespace
+            from automation.prep_engine import _build_form_answers
+            package = SimpleNamespace(form_answers=_build_form_answers(profile, profile.get("qa_vault", {})),
+                                      resume_path=profile.get("resume_path", ""), cover_letter_text="",
+                                      job_snapshot=job, evaluation_snapshot={})
 
-    if adapter is None:
-        adapter = get_ats_adapter(url)
-    platform_name = getattr(adapter, "platform_name", "ats")
-    db.log_message(f"ATS Execution: Selected adapter '{platform_name}' for {url[:45]}")
+        # Inspect
+        await asyncio.wait_for(adapter.inspect(page), timeout=30)
+        # Fill
+        filled = await asyncio.wait_for(adapter.fill(page, package=package, profile=profile), timeout=300)
+        # Validate
+        validation = await asyncio.wait_for(adapter.validate(page), timeout=30)
+        if not filled or not isinstance(validation, dict) or validation.get("valid") is not True:
+            reason = f"Form requires review: {validation}"
+            if token:
+                db.finish_submission(token, "failed", reason)
+            return SubmissionResult(False, state=JobState.RETRYABLE)
 
-    # Inspect
-    if hasattr(adapter, "inspect"):
-        await adapter.inspect(page)
+        if dry_run:
+            db.log_message(f"[DRY RUN] Validated {title} at {company}. No submit action invoked.")
+            return SubmissionResult(True, state="DRY_RUN_VALIDATED", verified=False)
 
-    # Fill
-    if url and not dry_run:
-        db.set_checkpoint(url, "filling_form")
-    filled = await adapter.fill(page, package=package, profile=profile) if hasattr(adapter, "fill") else True
-    if not filled:
-        db.log_message("ATS Execution Warning: Adapter fill reported zero filled fields.")
+        # Confirm-before-submit Human Gate
+        if not await _human_gate(page, url, CONFIG, confirm_submit=confirm_submit):
+            db.finish_submission(token, "aborted", "Operator did not confirm submission.")
+            return SubmissionResult(False, state=JobState.FIELDS_FILLED)
 
-    # Validate
-    val_res = await adapter.validate(page) if hasattr(adapter, "validate") else {"valid": True}
-    if not val_res.get("valid", True):
-        db.log_message(f"ATS Execution Error: Validation failed. Missing required fields: {val_res.get('missing_required')}")
-        if url and not dry_run:
-            transition(url, JobState.RETRYABLE, checkpoint="validation_failed", detail=str(val_res.get("missing_required")))
-        return SubmissionResult(False, state=JobState.RETRYABLE, verified=False)
+        # Submit
+        db.mark_submission_started(token, CONFIG.get("settings", {}).get("daily_apply_cap", 25))
+        clicked = True
+        submitted = await asyncio.wait_for(adapter.submit(page, dry_run=False), timeout=30)
+        if not submitted:
+            db.finish_submission(token, "unverified", "Submit returned no confirmation; check portal before retrying.")
+            return SubmissionResult(False, state=JobState.SUBMITTED_UNVERIFIED)
 
-    # Confirm-before-submit Human Gate
-    cfg_to_check = CONFIG if isinstance(CONFIG, dict) and CONFIG else load_config()
-    if not _human_gate(page, url, cfg_to_check):
-        db.log_message(f"[SUPERVISED] Form submission aborted by operator for {url}")
-        if url and not dry_run:
-            transition(url, JobState.FIELDS_FILLED, checkpoint="submit_aborted_by_human", detail="Operator aborted submission")
-        if called_with_dict:
-            return SubmissionResult(False, state=JobState.FIELDS_FILLED, verified=False)
-        return False
-
-    # Submit
-    if url and not dry_run:
-        db.set_checkpoint(url, "submitting")
-    submitted = await adapter.submit(page, dry_run=dry_run) if hasattr(adapter, "submit") else True
-
-    if submitted:
         # Check verification of submission success
-        verified = True if dry_run else getattr(adapter, "verify_success", lambda p: True)(page)
+        import inspect
+        verifier = getattr(adapter, "verify_success", None)
+        verified = False
+        if callable(verifier):
+            try:
+                result = verifier(page)
+                if inspect.isawaitable(result):
+                    result = await asyncio.wait_for(result, timeout=20)
+                verified = result is True
+            except Exception:
+                verified = False
+        status = "submitted" if verified else "unverified"
         final_state = JobState.SUBMITTED if verified else JobState.SUBMITTED_UNVERIFIED
-        chk = "submitted" if verified else "submitted_unverified"
-
-        if url and not dry_run:
-            transition(url, final_state, checkpoint=chk, detail=f"Application {final_state.lower()}")
-            db.record_outcome(url, "applied", notes=f"Submitted via {platform_name} adapter (verified={verified})")
-            db.update_job_status_in_csv(url, "Approval Needed", "Applied", f"Submitted via {platform_name}")
-        db.log_message(f"✅ Application Execution Completed [{final_state}]: {title} at {company}")
-        if called_with_dict:
-            return SubmissionResult(True, state=final_state, verified=verified)
-        return True
-    else:
-        if url and not dry_run:
-            transition(url, JobState.FAILED, checkpoint="submit_failed", detail="Submit action did not confirm")
-        if called_with_dict:
-            return SubmissionResult(False, state=JobState.FAILED, verified=False)
-        return False
+        db.finish_submission(token, status, f"Submitted via {platform_name}; verified={verified}")
+        db.log_message(f"Application [{final_state}]: {title} at {company}")
+        return SubmissionResult(True, state=final_state, verified=verified)
+    except asyncio.CancelledError:
+        if token:
+            db.finish_submission(token, "unverified" if clicked else "failed", "Execution cancelled; review last checkpoint.")
+        raise
+    except Exception as exc:
+        final_state = JobState.SUBMITTED_UNVERIFIED if clicked else JobState.RETRYABLE
+        if token:
+            db.finish_submission(token, "unverified" if clicked else "failed", f"{type(exc).__name__}: {exc}")
+        db.log_message(f"ATS execution stopped ({final_state}): {type(exc).__name__}: {exc}")
+        return SubmissionResult(False, state=final_state)

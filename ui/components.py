@@ -7,37 +7,37 @@ ctk.set_default_color_theme("blue")
 
 # Linear / Raycast / Palantir Restrained Technical Dark Palette
 C = {
-    "bg":               "#0F0F0D",
-    "canvas":           "#0F0F0D",
-    "sidebar":          "#11110F",
-    "card":             "#171614",
-    "surface":          "#171614",
-    "surface_hover":    "#1C1B18",
-    "card_hover":       "#1C1B18",
-    "elevated":         "#1C1B18",
-    "input":            "#171614",
-    "deep":             "#0D0D0B",
-    "hairline":         "#1F1E1B",
-    "hairline_strong":  "#282621",
-    "border":           "#282621",
-    "divider_soft":     "#171614",
+    "bg":               "#101318",
+    "canvas":           "#101318",
+    "sidebar":          "#14181F",
+    "card":             "#191E26",
+    "surface":          "#191E26",
+    "surface_hover":    "#252D39",
+    "card_hover":       "#252D39",
+    "elevated":         "#222A35",
+    "input":            "#141920",
+    "deep":             "#141920",
+    "hairline":         "#252D38",
+    "hairline_strong":  "#35404F",
+    "border":           "#303A48",
+    "divider_soft":     "#252D38",
     "focus":            "#E8E5DE",
     "primary":          "#E8E5DE",
-    "primary_on":       "#0F0F0D",
+    "primary_on":       "#101823",
     "primary_p":        "#D6D0C4",
-    "accent":           "#D6D0C4",
-    "accent_h":         "#C4BEB2",
-    "accent_hover":     "#C4BEB2",
-    "accent_d":         "#B0AAA0",
-    "text":             "#E8E5DE",
-    "ink":              "#E8E5DE",
-    "body":             "#C2BEB5",
-    "secondary":        "#9A968D",
-    "charcoal":         "#9A968D",
-    "tertiary":         "#66635C",
-    "muted":            "#66635C",
-    "dim":              "#47453F",
-    "ash":              "#66635C",
+    "accent":           "#A9C4E8",
+    "accent_h":         "#C0D6F0",
+    "accent_hover":     "#C0D6F0",
+    "accent_d":         "#8AAAD2",
+    "text":             "#F0F3F8",
+    "ink":              "#F0F3F8",
+    "body":             "#CCD3DE",
+    "secondary":        "#A6B1C2",
+    "charcoal":         "#A6B1C2",
+    "tertiary":         "#94A0B2",
+    "muted":            "#94A0B2",
+    "dim":              "#78869B",
+    "ash":              "#94A0B2",
     "stone":            "#33312C",
     "on_light":         "#0F0F0D",
     "on_light_mute":    "#47453F",
@@ -57,33 +57,33 @@ C = {
     "red_h":            "#966565",
     "purple":           "#9E8FA8",
     "cyan":             "#7E9DB5",
-    "chip":             "#1C1B18",
-    "chip_border":      "#282621",
-    "chip_text":        "#E8E5DE",
+    "chip":             "#222A35",
+    "chip_border":      "#35404F",
+    "chip_text":        "#CCD3DE",
 }
 
 F = {
-    "display_xxl": ("Segoe UI", 24, "bold"),
-    "display_xl":  ("Segoe UI", 20, "bold"),
-    "display_lg":  ("Segoe UI", 16, "bold"),
-    "h1":          ("Segoe UI", 15, "bold"),
-    "h2":          ("Segoe UI", 12, "bold"),
-    "h3":          ("Segoe UI", 11, "bold"),
-    "subtitle":    ("Segoe UI", 10),
-    "body_lg":     ("Segoe UI", 11),
-    "body":        ("Segoe UI", 10),
-    "body_b":      ("Segoe UI", 10, "bold"),
-    "sm":          ("Segoe UI", 10),
-    "sm_b":        ("Segoe UI", 10, "bold"),
-    "xs":          ("Segoe UI", 9),
-    "xs_b":        ("Segoe UI", 9, "bold"),
-    "mono":        ("Consolas", 10),
-    "mono_sm":     ("Consolas", 9),
-    "logo":        ("Segoe UI", 14, "bold"),
-    "metric":      ("Segoe UI", 24, "bold"),
-    "metric_sm":   ("Segoe UI", 16, "bold"),
-    "nav":         ("Segoe UI", 10),
-    "nav_a":       ("Segoe UI", 10, "bold"),
+    "display_xxl": ("Segoe UI", 32, "bold"),
+    "display_xl":  ("Segoe UI", 28, "bold"),
+    "display_lg":  ("Segoe UI", 22, "bold"),
+    "h1":          ("Segoe UI", 24, "bold"),
+    "h2":          ("Segoe UI", 18, "bold"),
+    "h3":          ("Segoe UI", 14, "bold"),
+    "subtitle":    ("Segoe UI", 13),
+    "body_lg":     ("Segoe UI", 15),
+    "body":        ("Segoe UI", 14),
+    "body_b":      ("Segoe UI", 14, "bold"),
+    "sm":          ("Segoe UI", 13),
+    "sm_b":        ("Segoe UI", 13, "bold"),
+    "xs":          ("Segoe UI", 12),
+    "xs_b":        ("Segoe UI", 12, "bold"),
+    "mono":        ("Consolas", 13),
+    "mono_sm":     ("Consolas", 12),
+    "logo":        ("Segoe UI", 20, "bold"),
+    "metric":      ("Segoe UI", 32, "bold"),
+    "metric_sm":   ("Segoe UI", 24, "bold"),
+    "nav":         ("Segoe UI", 14),
+    "nav_a":       ("Segoe UI", 14, "bold"),
 }
 
 
@@ -92,10 +92,10 @@ def configure_treeview_style():
     style.theme_use("clam")
     style.configure("Dark.Treeview",
         background=C["card"], foreground=C["text"], fieldbackground=C["card"],
-        rowheight=34, borderwidth=0, font=F["sm"])
+        rowheight=44, borderwidth=0, font=F["sm"])
     style.configure("Dark.Treeview.Heading",
         background=C["elevated"], foreground=C["charcoal"],
-        font=F["sm_b"], relief="flat", borderwidth=0)
+        font=F["sm_b"], relief="flat", borderwidth=0, padding=(10, 12))
     style.map("Dark.Treeview",
         background=[("selected", C["elevated"])],
         foreground=[("selected", C["ink"])])
@@ -164,15 +164,7 @@ def animate_fade_color(widget, from_color, to_color, duration_ms=180, steps=12, 
 
 
 def animate_view_transition(container, callback, duration_ms=120):
-    orig = C["bg"]
-    dim_col = "#0F0D0B"
-
-    def _do_switch():
-        callback()
-        animate_fade_color(container, dim_col, orig, duration_ms=duration_ms)
-
-    animate_fade_color(container, orig, dim_col, duration_ms=duration_ms // 2)
-    container.after(duration_ms // 2, _do_switch)
+    callback()
 
 
 def create_action_btn(parent, text, command, color="primary", size="normal"):
@@ -186,14 +178,14 @@ def create_action_btn(parent, text, command, color="primary", size="normal"):
         "warning":   ("transparent",     C["card_hover"], C["amber"],      C["border"]),
     }
     fg, hover, tc, bc = color_map.get(color, color_map["primary"])
-    dim = {"small": (26, 6), "normal": (34, 6), "large": (38, 6)}
+    dim = {"small": (32, 7), "normal": (38, 8), "large": (44, 8)}
     h, cr = dim.get(size, dim["normal"])
     font = F["xs_b"] if size == "small" else F["sm_b"]
     border_w = 1 if bc else 0
     return ctk.CTkButton(
         parent, text=text, command=command,
         fg_color=fg, hover_color=hover, text_color=tc,
-        font=font, corner_radius=cr, height=h,
+        font=font, corner_radius=cr, height=h, width=112 if size == "small" else 140,
         border_width=border_w, border_color=bc, cursor="hand2"
     )
 

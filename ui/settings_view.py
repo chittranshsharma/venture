@@ -2,7 +2,7 @@ import json
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
-from core.config_manager import CONFIG, CONFIG_PATH, LOCATION_DATA, get_installed_ollama_models
+from core.config_manager import CONFIG, save_config, LOCATION_DATA, get_installed_ollama_models
 from core.db_manager import log_message, recalculate_metrics
 from core.credential_store import get_credential, store_credential
 from ui.components import C, F, TagChipContainer, add_form_input, create_action_btn, add_section_divider
@@ -19,9 +19,9 @@ class SettingsView(ctk.CTkFrame):
         title_box = ctk.CTkFrame(title_row, fg_color="transparent")
         title_box.pack(side='left', anchor='w')
         
-        lbl_title = ctk.CTkLabel(title_box, text="AI & Search Settings", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title = ctk.CTkLabel(title_box, text="Settings", font=F["h1"], text_color=C["ink"], anchor="w")
         lbl_title.pack(anchor='w')
-        lbl_sub = ctk.CTkLabel(title_box, text="Model provider configuration, telemetry thresholds, and execution filters.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub = ctk.CTkLabel(title_box, text="Choose where to search and how your agent works.", font=F["xs"], text_color=C["ash"], anchor="w")
         lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # ── Scrollable Card ──
@@ -46,11 +46,11 @@ class SettingsView(ctk.CTkFrame):
             f_ai,
             values=["Local Ollama (Offline)", "Cloud AI / REST API"],
             command=self.on_provider_changed,
-            selected_color=C["primary"],
-            selected_hover_color=C["accent_h"],
+            selected_color=C["elevated"],
+            selected_hover_color=C["card_hover"],
             unselected_color=C["input"],
             unselected_hover_color=C["card_hover"],
-            text_color=C["primary_on"],
+            text_color=C["text"],
             font=F["xs_b"],
             corner_radius=8,
             height=36
@@ -128,8 +128,8 @@ class SettingsView(ctk.CTkFrame):
             f_auth_type,
             values=["API Key / Bearer Token", "Username & Password (Basic Auth)"],
             command=self.on_auth_type_changed,
-            selected_color=C["accent"],
-            selected_hover_color=C["accent_d"],
+            selected_color=C["elevated"],
+            selected_hover_color=C["card_hover"],
             unselected_color=C["input"],
             unselected_hover_color=C["card_hover"],
             text_color=C["ink"],
@@ -265,6 +265,18 @@ class SettingsView(ctk.CTkFrame):
             self.sw_safe_mode.select()
         else:
             self.sw_safe_mode.deselect()
+
+        self.sw_dry_run = ctk.CTkSwitch(safe_frame, text="  Preview only — never send applications",
+            progress_color=C["accent"], button_color=C["text"], text_color=C["ink"], font=F["sm"])
+        self.sw_dry_run.pack(anchor='w', pady=(10, 4))
+        if CONFIG["settings"].get("dry_run_mode", True):
+            self.sw_dry_run.select()
+
+        self.sw_confirm = ctk.CTkSwitch(safe_frame, text="  Ask for final confirmation before submission",
+            progress_color=C["accent"], button_color=C["text"], text_color=C["ink"], font=F["sm"])
+        self.sw_confirm.pack(anchor='w', pady=4)
+        if CONFIG["settings"].get("confirm_before_submit", True):
+            self.sw_confirm.select()
 
         self.settings_daily_cap = add_form_input(card, "Daily Application Safety Cap (Max per day)")
         self.settings_min_delay = add_form_input(card, "Minimum Delay Between Applications (Seconds)")
@@ -447,8 +459,7 @@ class SettingsView(ctk.CTkFrame):
             return
         pages.append({"url": url, "company": company})
         CONFIG.setdefault("settings", {})["company_career_pages"] = pages
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(CONFIG, f, indent=4)
+        save_config()
         self.entry_career_url.delete(0, 'end')
         self.entry_career_company.delete(0, 'end')
         self._render_career_pages()
@@ -459,8 +470,7 @@ class SettingsView(ctk.CTkFrame):
         if 0 <= idx < len(pages):
             removed = pages.pop(idx)
             CONFIG["settings"]["company_career_pages"] = pages
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(CONFIG, f, indent=4)
+            save_config()
             self._render_career_pages()
             name = removed.get("company") or removed.get("url", "") if isinstance(removed, dict) else removed
             log_message(f"🏢 Career page removed: {name}")
@@ -599,8 +609,7 @@ class SettingsView(ctk.CTkFrame):
 
     def update_config_list(self, key, val):
         CONFIG["settings"][key] = val
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(CONFIG, f, indent=4)
+        save_config()
         recalculate_metrics()
         self.controller.refresh_nav_buttons()
 
@@ -664,6 +673,8 @@ class SettingsView(ctk.CTkFrame):
             CONFIG["settings"]["max_jobs_per_query"] = max_jb
             CONFIG["settings"]["radar_interval_seconds"] = radar_int
             CONFIG["settings"]["safe_mode"] = True if self.sw_safe_mode.get() else False
+            CONFIG["settings"]["dry_run_mode"] = bool(self.sw_dry_run.get())
+            CONFIG["settings"]["confirm_before_submit"] = bool(self.sw_confirm.get())
             CONFIG["settings"]["daily_apply_cap"] = daily_cap
             CONFIG["settings"]["min_delay_seconds"] = min_d
             CONFIG["settings"]["max_delay_seconds"] = max_d
@@ -686,8 +697,7 @@ class SettingsView(ctk.CTkFrame):
             CONFIG["settings"]["cloud_ai_username"] = ""
             CONFIG["settings"]["cloud_ai_password"] = ""
             
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(CONFIG, f, indent=4)
+            save_config()
             messagebox.showinfo("Success", "All settings validated & saved successfully!")
             log_message("Settings validated & saved via Desktop GUI.")
             recalculate_metrics()
@@ -734,6 +744,11 @@ class SettingsView(ctk.CTkFrame):
         self.refresh_models()
         
         # Reload safety settings
+        for widget, key in ((self.sw_dry_run, "dry_run_mode"), (self.sw_confirm, "confirm_before_submit")):
+            if CONFIG["settings"].get(key, True):
+                widget.select()
+            else:
+                widget.deselect()
         if CONFIG["settings"].get("safe_mode", True):
             self.sw_safe_mode.select()
         else:

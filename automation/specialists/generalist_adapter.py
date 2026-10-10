@@ -27,26 +27,22 @@ class GeneralistAdapter(ATSAdapter):
         company = getattr(package, "job_snapshot", {}).get("company", "") if package else ""
 
         try:
-            await auto_fill_playwright_form(page, job_title=job_title, company=company, job_url=url)
-            db.set_checkpoint(url, "fields_filled")
-            return True
+            return await auto_fill_playwright_form(page, job_title=job_title, company=company, job_url="", profile=profile)
         except Exception as e:
             db.log_message(f"GeneralistAdapter fill error: {e}")
             return False
 
     async def validate(self, page) -> Dict[str, Any]:
-        return {"valid": True, "missing_required": []}
+        return await self.validate_required_fields(page)
 
     async def submit(self, page, dry_run: bool = False) -> bool:
         url = page.url
         if dry_run:
             db.log_message(f"[DRY RUN] GeneralistAdapter: Simulated submission for {url[:45]}.")
-            db.set_checkpoint(url, "dry_run_validated")
             return True
 
         submit_btn = page.locator("button:has-text('Submit'), button:has-text('Apply now'), input[type='submit']")
         if await submit_btn.count() > 0:
             await submit_btn.first.click()
-            db.set_checkpoint(url, "submitted")
             return True
         return False

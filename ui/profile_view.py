@@ -3,7 +3,7 @@ import json
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
-from core.config_manager import CONFIG, CONFIG_PATH
+from core.config_manager import CONFIG, save_config
 from core.db_manager import log_message, recalculate_metrics
 from ui.components import C, F, TagChipContainer, add_grid_input, create_action_btn, add_section_divider
 
@@ -21,7 +21,7 @@ class ProfileView(ctk.CTkFrame):
         
         lbl_title = ctk.CTkLabel(title_box, text="Candidate Profile", font=F["h1"], text_color=C["ink"], anchor="w")
         lbl_title.pack(anchor='w')
-        lbl_sub = ctk.CTkLabel(title_box, text="Master curriculum data, candidate vault, and verification parameters.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub = ctk.CTkLabel(title_box, text="The details behind your applications. Keep them accurate and current.", font=F["xs"], text_color=C["ash"], anchor="w")
         lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # ── Scrollable Card ──
@@ -93,7 +93,7 @@ class ProfileView(ctk.CTkFrame):
         f_auth = ctk.CTkFrame(grid_qa, fg_color="transparent")
         f_auth.grid(row=3, column=0, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_auth, text="Authorized to Work?", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
-        self.qa_auth = ctk.CTkOptionMenu(f_auth, values=["Yes", "No"],
+        self.qa_auth = ctk.CTkOptionMenu(f_auth, values=["Not set", "Yes", "No"],
                                          fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
                                          dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_auth.pack(fill='x')
@@ -101,7 +101,7 @@ class ProfileView(ctk.CTkFrame):
         f_spons = ctk.CTkFrame(grid_qa, fg_color="transparent")
         f_spons.grid(row=3, column=1, padx=8, pady=6, sticky='ew')
         ctk.CTkLabel(f_spons, text="Require Visa Sponsorship?", font=F["sm_b"], text_color=C["muted"], anchor="w").pack(anchor='w', pady=(0, 2))
-        self.qa_spons = ctk.CTkOptionMenu(f_spons, values=["No", "Yes"],
+        self.qa_spons = ctk.CTkOptionMenu(f_spons, values=["Not set", "No", "Yes"],
                                           fg_color=C["input"], button_color=C["elevated"], text_color=C["ink"],
                                           dropdown_fg_color=C["card"], dropdown_text_color=C["ink"], dropdown_hover_color=C["elevated"], font=F["sm"], corner_radius=8, height=36)
         self.qa_spons.pack(fill='x')
@@ -175,8 +175,7 @@ class ProfileView(ctk.CTkFrame):
         if all_skills:
             cand["skills"] = all_skills
             
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(CONFIG, f, indent=4)
+        save_config()
         recalculate_metrics()
         self.controller.refresh_nav_buttons()
 
@@ -198,8 +197,8 @@ class ProfileView(ctk.CTkFrame):
         self.qa_ectc.delete(0, 'end'); self.qa_ectc.insert(0, str(qa.get("expected_ctc", "3")))
         self.qa_stipend.delete(0, 'end'); self.qa_stipend.insert(0, str(qa.get("expected_stipend", "15000")))
         self.qa_pref.set(qa.get("work_preference", "Remote"))
-        self.qa_auth.set(qa.get("work_authorization", "Yes"))
-        self.qa_spons.set(qa.get("require_sponsorship", "No"))
+        self.qa_auth.set(qa.get("work_authorization") or "Not set")
+        self.qa_spons.set(qa.get("require_sponsorship") or "Not set")
         self.qa_reloc.set(qa.get("willing_to_relocate", "Yes"))
         self.qa_gender.set(qa.get("gender", "Decline to state"))
         
@@ -253,8 +252,8 @@ class ProfileView(ctk.CTkFrame):
             qa["expected_ctc"] = ectc_val if ectc_val else "3"
             qa["expected_stipend"] = stipend_val if stipend_val else "15000"
             qa["work_preference"] = self.qa_pref.get()
-            qa["work_authorization"] = self.qa_auth.get()
-            qa["require_sponsorship"] = self.qa_spons.get()
+            qa["work_authorization"] = "" if self.qa_auth.get() == "Not set" else self.qa_auth.get()
+            qa["require_sponsorship"] = "" if self.qa_spons.get() == "Not set" else self.qa_spons.get()
             qa["willing_to_relocate"] = self.qa_reloc.get()
             qa["gender"] = self.qa_gender.get()
             
@@ -266,8 +265,7 @@ class ProfileView(ctk.CTkFrame):
             edu["tenth_percentage"] = self.edu_10th.get().strip()
             edu["twelfth_percentage"] = self.edu_12th.get().strip()
             
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(CONFIG, f, indent=4)
+            save_config()
             messagebox.showinfo("Success", "Candidate profile, Education & ATS QA Vault updated successfully!")
             log_message("Candidate Profile, Education & QA Vault saved via Desktop GUI.")
             recalculate_metrics()

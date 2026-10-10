@@ -64,7 +64,6 @@ class GreenhouseAdapter(ATSAdapter):
                 except Exception:
                     continue
 
-        db.set_checkpoint(url, "fields_filled")
 
         # Step 2: Resume Attachment
         resume_path = getattr(package, "resume_path", "") or profile.get("resume_path", "")
@@ -74,7 +73,6 @@ class GreenhouseAdapter(ATSAdapter):
                 if await upload.count() > 0:
                     await upload.first.set_input_files(resume_path)
                     db.log_message(f"GreenhouseAdapter: Attached resume ({os.path.basename(resume_path)})")
-                    db.set_checkpoint(url, "resume_uploaded")
             except Exception as e:
                 db.log_message(f"GreenhouseAdapter: Resume attachment warning: {e}")
 
@@ -90,28 +88,8 @@ class GreenhouseAdapter(ATSAdapter):
                 pass
 
         # Step 4: Work Authorization & Sponsorship Questions
-        auth_status = answers.get("work_authorization", "Yes")
-        sponsorship = answers.get("sponsorship_required", "No")
-        try:
-            auth_selects = page.locator("select[name*='authorized'], select[name*='authorization'], select[name*='sponsorship'], select[name*='visa'], select[id*='authorized'], select[id*='sponsorship']")
-            auth_count = await auth_selects.count()
-            for idx in range(auth_count):
-                sel = auth_selects.nth(idx)
-                name_attr = (await sel.get_attribute("name") or "").lower()
-                id_attr = (await sel.get_attribute("id") or "").lower()
-                target_val = "No" if ("sponsorship" in name_attr or "sponsorship" in id_attr or "visa" in name_attr) else "Yes"
-                try:
-                    await sel.select_option(label=target_val)
-                except Exception:
-                    try:
-                        await sel.select_option(value=target_val.lower())
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        db.set_checkpoint(url, "work_authorization")
-        return filled_count > 0
+        legal_answers_complete = await self.fill_work_authorization(page, answers)
+        return filled_count > 0 and legal_answers_complete
 
     async def validate(self, page) -> Dict[str, Any]:
         missing = []
@@ -124,7 +102,9 @@ class GreenhouseAdapter(ATSAdapter):
 
         is_valid = len(missing) == 0
         db.log_message(f"GreenhouseAdapter [Validate]: valid={is_valid}, missing={missing}")
-        return {"valid": is_valid, "missing_required": missing}
+        browser_validation = await self.validate_required_fields(page)
+        missing.extend(browser_validation.get("missing_required", []))
+        return {"valid": is_valid and browser_validation.get("valid") is True, "missing_required": missing}
 
     async def submit(self, page, dry_run: bool = False) -> bool:
         url = page.url
@@ -135,10 +115,8 @@ class GreenhouseAdapter(ATSAdapter):
 
         if dry_run:
             db.log_message(f"[DRY RUN] GreenhouseAdapter: Form valid. Would submit {url[:45]}.")
-            db.set_checkpoint(url, "dry_run_validated")
             return True
 
         db.log_message(f"GreenhouseAdapter: Submitting application for {url[:45]}...")
         await submit_btn.first.click()
-        db.set_checkpoint(url, "submitted")
         return True

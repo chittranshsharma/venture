@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import Future
 import webbrowser
 import customtkinter as ctk
 import tkinter as tk
@@ -27,11 +28,11 @@ class ApprovalsView(ctk.CTkFrame):
         title_box = ctk.CTkFrame(title_row, fg_color="transparent")
         title_box.pack(side='left', anchor='w')
         
-        lbl_title = ctk.CTkLabel(title_box, text="Doubt Queue Approvals", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title = ctk.CTkLabel(title_box, text="Approvals", font=F["h1"], text_color=C["ink"], anchor="w")
         lbl_title.pack(anchor='w')
         lbl_sub = ctk.CTkLabel(
             title_box,
-            text="Human-in-the-loop decision center: review, approve, or skip calibrated opportunities.",
+            text="Your call. Review the evidence before an application goes out.",
             font=F["xs"], text_color=C["ash"], anchor="w"
         )
         lbl_sub.pack(anchor='w', pady=(2, 0))
@@ -39,8 +40,8 @@ class ApprovalsView(ctk.CTkFrame):
         # ── Split Layout ──
         card_split = ctk.CTkFrame(self, fg_color="transparent")
         card_split.pack(fill='both', expand=True)
-        card_split.columnconfigure(0, weight=1)
-        card_split.columnconfigure(1, weight=2)
+        card_split.columnconfigure(0, weight=1, minsize=300)
+        card_split.columnconfigure(1, weight=2, minsize=520)
         card_split.rowconfigure(0, weight=1)
 
         # ── Left: Job List Card ──
@@ -54,8 +55,10 @@ class ApprovalsView(ctk.CTkFrame):
         self._mode_seg = ctk.CTkSegmentedButton(
             left_card, values=["Queue", "Archived"],
             command=self._on_mode_change,
-            selected_color=C["accent"], selected_hover_color=C.get("accent_hover", C.get("accent_h", "#C4BEB2")),
-            font=F["xs_b"]
+            selected_color=C["elevated"], selected_hover_color=C["card_hover"],
+            unselected_color=C["input"], unselected_hover_color=C["elevated"],
+            text_color=C["text"], text_color_disabled=C["secondary"],
+            font=F["xs_b"], height=36
         )
         self._mode_seg.set("Queue")
         self._mode_seg.pack(fill='x', padx=12, pady=(12, 6))
@@ -177,22 +180,24 @@ class ApprovalsView(ctk.CTkFrame):
         btn_row = ctk.CTkFrame(right_card, fg_color="transparent")
         btn_row.grid(row=5, column=0, sticky='ew', padx=14, pady=(0, 14))
         
-        self.btn_rev = create_action_btn(btn_row, "🔍  Review", self.review_job_in_browser, "secondary", "normal")
+        self.btn_rev = create_action_btn(btn_row, "View posting", self.review_job_in_browser, "secondary", "small")
         self.btn_rev.pack(side='left', padx=(0, 8))
 
-        self.btn_restore = create_action_btn(btn_row, "↺  Restore to Queue", self.restore_selected_archived_job, "accent", "normal")
+        self.btn_restore = create_action_btn(btn_row, "Restore to queue", self.restore_selected_archived_job, "primary", "normal")
 
-        self.btn_appr = create_action_btn(btn_row, "✓  Approve & Apply", self.approve_and_apply_job, "primary", "normal")
+        self.btn_appr = create_action_btn(btn_row, "Approve & apply", self.approve_and_apply_job, "primary", "normal")
         self.btn_appr.pack(side='left', padx=(0, 8))
 
-        self.btn_rej = create_action_btn(btn_row, "✕  Reject & Skip", self.reject_and_skip_job, "danger", "normal")
+        self.btn_rej = create_action_btn(btn_row, "Skip opportunity", self.reject_and_skip_job, "danger", "normal")
         self.btn_rej.pack(side='left', padx=(0, 8))
 
-        self.reject_label = ctk.CTkLabel(btn_row, text="Reason:", font=F["xs_b"], text_color=C["muted"])
+        reason_row = ctk.CTkFrame(right_card, fg_color="transparent")
+        reason_row.grid(row=6, column=0, sticky='ew', padx=14, pady=(0, 14))
+        self.reject_label = ctk.CTkLabel(reason_row, text="Skip reason", font=F["xs_b"], text_color=C["muted"])
         self.reject_label.pack(side='left', padx=(4, 4))
         self.reject_reason_var = ctk.StringVar(value="unsure")
         self.reject_reason_menu = ctk.CTkOptionMenu(
-            btn_row,
+            reason_row,
             values=["unsure", "not_fit", "location", "seniority", "duplicate", "company", "other"],
             variable=self.reject_reason_var,
             width=110,
@@ -258,7 +263,7 @@ class ApprovalsView(ctk.CTkFrame):
             color = C["red"]
             badge = "⛔ BLOCKED TITLE"
         elif is_stretch:
-            color = "#38bdf8"  # vibrant cyan
+            color = C["blue"]  # vibrant cyan
             badge = "⚡ STRETCH OPPORTUNITY"
         elif job.get("source") == "explore":
             color = C["amber"]
@@ -410,13 +415,21 @@ class ApprovalsView(ctk.CTkFrame):
         url_iid = selected[0]
         job = None
         with state.DOUBT_LOCK:
-            for idx, j in enumerate(state.DOUBT_QUEUE):
-                if j.get("url") == url_iid:
-                    job = state.DOUBT_QUEUE.pop(idx)
-                    break
+            job = next((j for j in state.DOUBT_QUEUE if j.get("url") == url_iid), None)
         if not job:
             job = self._active_jobs.get(url_iid)
         if not job:
+            return
+
+        from automation.orchestrator import approve
+        from core.db_manager import get_application
+        try:
+            if not get_application(job["url"]):
+                save_to_db(job["url"], job.get("title", ""), job.get("company", ""),
+                           job.get("platform", ""), "Approval Needed", jd_text=job.get("description", ""))
+            approve(job["url"])
+        except Exception as exc:
+            messagebox.showerror("Approval blocked", str(exc))
             return
 
         # Log human approve decision as training label before dispatching
@@ -433,12 +446,37 @@ class ApprovalsView(ctk.CTkFrame):
             source=job.get("source", "queue"),
             propensity=job.get("propensity", 1.0),
         )
-        apply_single_job_async(job)
+        if not apply_single_job_async(job, confirm_submit=self.confirm_submission):
+            messagebox.showwarning("Not dispatched", "Application was blocked. Review the activity log before retrying.")
+            return
+        with state.DOUBT_LOCK:
+            state.DOUBT_QUEUE[:] = [j for j in state.DOUBT_QUEUE if j.get("url") != url_iid]
         self.load_approvals_table()
         self.appr_desc.delete('1.0', 'end')
-        messagebox.showinfo("Success", "Applying to approved job in background...")
+        messagebox.showinfo("Preparing application", "The agent will validate the form. Live submission requires a final confirmation.")
         recalculate_metrics()
         self.controller.refresh_nav_buttons()
+
+    def confirm_submission(self, url, screenshot_path):
+        """Marshal the worker's final confirmation onto the Tk thread without blocking its event loop."""
+        answer = Future()
+
+        def ask():
+            try:
+                confirmed = messagebox.askyesno("Submit application?",
+                    f"The form is ready for:\n{url}\n\nReview screenshot:\n{screenshot_path}\n\nSend this application now?")
+                if not answer.done():
+                    answer.set_result(confirmed)
+            except Exception as exc:
+                if not answer.done():
+                    answer.set_exception(exc)
+
+        self.after(0, ask)
+        try:
+            return answer.result(timeout=120)
+        except Exception:
+            answer.cancel()
+            return False
 
     def reject_and_skip_job(self):
         selected = self.appr_tree.selection()

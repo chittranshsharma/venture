@@ -34,6 +34,8 @@ SAMPLE_PROFILE = {
     "github": "https://github.com/chittransh",
     "portfolio": "https://chittransh.dev",
     "resume_path": "",
+    "work_authorization": "Yes",
+    "sponsorship_required": "No",
 }
 
 class MockPackage:
@@ -96,6 +98,50 @@ def test_greenhouse_dom_fixture():
                     mock_click.assert_not_called()
 
             await browser.close()
+
+    asyncio.run(_run())
+
+
+def test_backend_dom_guards():
+    """Required-field and legal-answer checks use real DOM; generic filling cannot click Submit."""
+    from automation.form_autofiller import auto_fill_playwright_form
+
+    async def _run():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                for adapter in (GreenhouseAdapter(), LeverAdapter(), AshbyAdapter()):
+                    await page.set_content("""
+                        <form><input name="email" type="email" value="test@example.com" required>
+                        <input name="custom_required" required>
+                        <select name="work_authorization"><option value="">Choose</option>
+                            <option value="yes">Yes</option><option value="no">No</option></select>
+                        <select name="sponsorship"><option value="">Choose</option>
+                            <option value="yes">Yes</option><option value="no">No</option></select></form>
+                    """)
+                    assert not (await adapter.validate(page))["valid"]
+                    assert not await adapter.fill_work_authorization(page, {})
+                    assert await adapter.fill_work_authorization(page, {
+                        "work_authorization": "No", "sponsorship_required": "Yes"})
+                    assert await page.locator("select[name=work_authorization]").input_value() == "no"
+                    assert await page.locator("select[name=sponsorship]").input_value() == "yes"
+                    await page.locator("input[name=custom_required]").fill("Explicit answer")
+                    assert (await adapter.validate(page))["valid"]
+
+                await page.set_content("""
+                    <form onsubmit="event.preventDefault(); window.sent=true">
+                    <label for="email">Email address</label><input id="email" type="email" required>
+                    <button type="submit">Submit application</button></form>
+                    <script>window.sent=false</script>
+                """)
+                with patch("automation.form_autofiller.log_message"):
+                    assert await auto_fill_playwright_form(page, profile={"email": "test@example.com"})
+                assert await page.evaluate("window.sent") is False
+                await page.set_content("<h1>Thank you for applying</h1>")
+                assert await GreenhouseAdapter().verify_success(page)
+            finally:
+                await browser.close()
 
     asyncio.run(_run())
 

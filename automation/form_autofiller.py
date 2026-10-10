@@ -31,7 +31,7 @@ async def _react_safe_fill(page, field, value: str):
         try:
             await field.fill(str(value))
         except Exception:
-            pass
+            raise
 
 # ── Mapping of common ATS field patterns to QA Vault keys ──
 # Each entry: (list_of_field_hint_patterns, config_key_path, fallback_value)
@@ -93,14 +93,28 @@ def _get_config_value(key_path):
     return obj
 
 
-def _match_vault(label_text):
-    """Try to match a form field label to a QA vault entry. Returns value or None."""
+def _match_vault(label_text, profile=None):
+    """Resolve explicit profile facts; never substitute invented fallback answers."""
+    from automation.prep_engine import resolve_form_question
+    candidate = profile if profile is not None else CONFIG.get("candidate", {})
     label_lower = label_text.lower().strip()
+    answer, status = resolve_form_question(label_text, candidate.get("qa_vault", {}), candidate)
+    if status == "VAULT_MATCH" and answer is not None and str(answer).strip():
+        return str(answer)
+    if re.search(r"\b(visa|sponsor\w*|authoriz\w*|citizen\w*|salary|compensation|ctc|gender|sex|"
+                 r"disabil\w*|veteran|consent|legal|criminal|race|ethnic\w*|relocat\w*|notice|experience)\b", label_lower):
+        return None
+    parts = candidate.get("name", "").split()
+    if "first name" in label_lower:
+        return parts[0] if parts else None
+    if "last name" in label_lower:
+        return " ".join(parts[1:]) if len(parts) > 1 else None
     for patterns, key_path, fallback in VAULT_FIELD_MAP:
-        for pattern in patterns:
-            if pattern in label_lower:
-                val = _get_config_value(key_path)
-                return val if val else fallback
+        if any(pattern in label_lower for pattern in patterns):
+            value = candidate
+            for key in key_path[1:]:
+                value = value.get(key) if isinstance(value, dict) else None
+            return str(value) if value is not None and str(value).strip() else None
     return None
 
 
@@ -145,54 +159,16 @@ async def _get_field_label(field, page):
     return label_text
 
 
-async def _ai_answer_question(question_text, job_title="", company=""):
-    """Use the AI model to answer an application form question based on candidate profile."""
-    cand = CONFIG.get("candidate", {})
-    skills = ", ".join(cand.get("skills", []))
-    qa_vault = cand.get("qa_vault", {})
-    edu = qa_vault.get("education", {})
-
-    prompt = f"""You are an expert job application assistant. Answer the following job application form question 
-for the candidate. Give ONLY the answer text, nothing else. Be concise and professional.
-
-Candidate Profile:
-- Name: {cand.get('name', '')}
-- Skills: {skills}
-- Experience: {qa_vault.get('experience_years', '1')} years
-- Notice Period: {qa_vault.get('notice_period', 'Immediate')}
-- Current CTC: {qa_vault.get('current_ctc', '0')} LPA
-- Expected CTC: {qa_vault.get('expected_ctc', 'Negotiable')} LPA
-- Expected Stipend: {qa_vault.get('expected_stipend', '15000')}
-- Work Preference: {qa_vault.get('work_preference', 'Remote')}
-- Work Authorization: {qa_vault.get('work_authorization', 'Yes')}
-- Willing to Relocate: {qa_vault.get('willing_to_relocate', 'Yes')}
-- Education: {edu.get('degree', 'B.Tech')} from {edu.get('university', 'University')} (Grad: {edu.get('graduation_year', '2025')}, CGPA: {edu.get('cgpa', '8.5')}, 10th: {edu.get('tenth_percentage', '90')}%, 12th: {edu.get('twelfth_percentage', '88')}%)
-
-Job: {job_title} at {company}
-
-Form Question: "{question_text}"
-
-Rules:
-1. If the question asks for a number (years, salary, etc.), respond with ONLY the number.
-2. If the question is yes/no, respond with ONLY "Yes" or "No".
-3. If it's a city/location question, respond with the candidate's likely city or "Open to relocation".
-4. If you truly cannot determine the answer from the profile, respond with exactly: UNSURE
-5. Never respond with placeholder text like "N/A" or "Not applicable" - give a real answer or say UNSURE.
-
-Answer:"""
-
-    try:
-        reply = await asyncio.to_thread(query_ai_model, prompt)
-        answer = reply.strip().split("\n")[0].strip()  # Take first line only
-        if answer and answer.upper() != "UNSURE":
-            return answer
-    except Exception as e:
-        log_message(f"AI form answer error: {e}")
-    return None
+async def _ai_answer_question(question_text, job_title="", company="", profile=None):
+    """Unknown application answers require review rather than ungrounded model guesses."""
+    return _match_vault(question_text, profile=profile)
 
 
 async def _add_to_form_doubt_queue(question_text, field_info, job_title, company, job_url, platform):
     """Add an unanswered form question to the doubt queue for user input."""
+    if not job_url:
+        log_message(f"Form needs review: {question_text}")
+        return
     with state.DOUBT_LOCK:
         state.DOUBT_QUEUE.append({
             "title": job_title,
@@ -207,7 +183,7 @@ async def _add_to_form_doubt_queue(question_text, field_info, job_title, company
     log_message(f"FORM DOUBT: Cannot auto-answer '{question_text}' for {job_title} at {company}. Added to Doubt Queue - please answer in the browser window.")
 
 
-async def auto_fill_playwright_form(page, job_title="", company="", job_url="", platform=""):
+async def auto_fill_playwright_form(page, job_title="", company="", job_url="", platform="", profile=None):
     """
     Intelligent ATS form auto-filler with multi-layer answering:
     Layer 1: QA Vault pattern matching (instant, offline)
@@ -248,7 +224,7 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
                         continue
 
                     # Layer 1: Try QA Vault match
-                    vault_answer = _match_vault(label)
+                    vault_answer = _match_vault(label, profile=profile)
                     if vault_answer:
                         await _react_safe_fill(page, field, str(vault_answer))
                         log_message(f"Auto-filled '{label}' from QA Vault")
@@ -256,7 +232,7 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
                         continue
 
                     # Layer 2: Try AI answer
-                    ai_answer = await _ai_answer_question(label, job_title, company)
+                    ai_answer = await _ai_answer_question(label, job_title, company, profile=profile)
                     if ai_answer:
                         await _react_safe_fill(page, field, ai_answer)
                         log_message(f"AI-filled '{label}' -> '{ai_answer}'")
@@ -282,7 +258,7 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
                     if not label:
                         continue
 
-                    ai_answer = await _ai_answer_question(label, job_title, company)
+                    ai_answer = await _ai_answer_question(label, job_title, company, profile=profile)
                     if ai_answer:
                         await _react_safe_fill(page, ta, ai_answer)
                         log_message(f"AI-filled textarea '{label}'")
@@ -314,29 +290,15 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
                         continue
 
                     # Try vault match first
-                    vault_answer = _match_vault(label)
-                    if vault_answer:
-                        # Find best matching option
-                        vault_lower = vault_answer.lower()
-                        for opt_text in option_texts:
-                            if vault_lower in opt_text.lower() or opt_text.lower() in vault_lower:
-                                await sel.select_option(label=opt_text)
-                                log_message(f"Auto-selected '{opt_text}' for '{label}'")
-                                filled_count += 1
-                                break
-                        continue
-
-                    # AI-select: ask AI which option to pick
-                    options_str = ", ".join(option_texts[:15])
-                    ai_prompt = f"For the dropdown question '{label}', which option should I select? Options: [{options_str}]. Reply with ONLY the exact option text."
-                    ai_answer = await _ai_answer_question(ai_prompt, job_title, company)
-                    if ai_answer:
-                        for opt_text in option_texts:
-                            if ai_answer.lower().strip() in opt_text.lower() or opt_text.lower() in ai_answer.lower().strip():
-                                await sel.select_option(label=opt_text)
-                                log_message(f"AI-selected '{opt_text}' for '{label}'")
-                                filled_count += 1
-                                break
+                    vault_answer = _match_vault(label, profile=profile)
+                    matched = next((text for text in option_texts
+                                    if vault_answer is not None and text.casefold() == vault_answer.casefold()), None)
+                    if matched is not None:
+                        await sel.select_option(label=matched)
+                        filled_count += 1
+                    else:
+                        await _add_to_form_doubt_queue(label, {}, job_title, company, job_url, platform)
+                        doubt_count += 1
 
                 except Exception:
                     pass
@@ -373,37 +335,22 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
                         option_labels.append(opt_label or "Unknown")
 
                     # Try vault match
-                    vault_answer = _match_vault(question_text)
-                    if vault_answer:
-                        vault_lower = vault_answer.lower()
-                        for i, lbl in enumerate(option_labels):
-                            if vault_lower in lbl.lower() or lbl.lower() in vault_lower:
-                                await options[i].click()
-                                log_message(f"Auto-selected radio '{lbl}' for '{question_text}'")
-                                filled_count += 1
-                                break
-                        continue
-
-                    # AI answer
-                    labels_str = ", ".join(option_labels[:10])
-                    ai_answer = await _ai_answer_question(
-                        f"{question_text} Options: [{labels_str}]", job_title, company
-                    )
-                    if ai_answer:
-                        ai_lower = ai_answer.lower().strip()
-                        for i, lbl in enumerate(option_labels):
-                            if ai_lower in lbl.lower() or lbl.lower() in ai_lower:
-                                await options[i].click()
-                                log_message(f"AI-selected radio '{lbl}' for '{question_text}'")
-                                filled_count += 1
-                                break
+                    vault_answer = _match_vault(question_text, profile=profile)
+                    matched = next((i for i, label in enumerate(option_labels)
+                                    if vault_answer is not None and label.casefold() == vault_answer.casefold()), None)
+                    if matched is not None:
+                        await options[matched].check()
+                        filled_count += 1
+                    else:
+                        await _add_to_form_doubt_queue(question_text, {}, job_title, company, job_url, platform)
+                        doubt_count += 1
 
                 except Exception:
                     pass
 
             # ── 5. Upload resume if file input found ──
             if not resume_already_uploaded:
-                resume_path = CONFIG.get("candidate", {}).get("resume_path", "")
+                resume_path = (profile if profile is not None else CONFIG.get("candidate", {})).get("resume_path", "")
                 if resume_path and os.path.exists(resume_path):
                     file_inputs = await page.locator("input[type='file']:visible").all()
                     for fi in file_inputs:
@@ -439,21 +386,7 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
 
             if await submit_btn.count() > 0:
                 # We've reached the final step — try to submit
-                if doubt_count == 0:
-                    log_message(f"Smart Auto-Filler: All fields answered! Submitting application...")
-                    try:
-                        await submit_btn.first.click()
-                        await asyncio.sleep(3)
-                        log_message("Application submitted successfully!")
-                        if job_url:
-                            try:
-                                transition(job_url, JobState.SUBMITTED)
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        log_message(f"Submit click error: {e}")
-                else:
-                    log_message(f"Smart Auto-Filler: {doubt_count} question(s) need your input. Check the Doubt Queue tab or answer in the browser window.")
+                log_message("Form filled. Final submission belongs to the supervised ATS executor.")
                 break
 
             elif await next_btn.count() > 0:
@@ -473,6 +406,8 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
         if doubt_count > 0:
             log_message(f"Waiting for you to answer {doubt_count} question(s) in the browser window...")
 
+        return filled_count > 0 and doubt_count == 0
+
     except Exception as e:
         log_message(f"Critical error during smart form auto-fill: {e}")
         if job_url:
@@ -480,3 +415,4 @@ async def auto_fill_playwright_form(page, job_title="", company="", job_url="", 
                 transition(job_url, JobState.FAILED, detail=str(e))
             except Exception:
                 pass
+        return False

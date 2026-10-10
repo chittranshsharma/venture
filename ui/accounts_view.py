@@ -2,7 +2,7 @@ import json
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
-from core.config_manager import CONFIG, CONFIG_PATH
+from core.config_manager import CONFIG, save_config
 from core.db_manager import log_message, recalculate_metrics
 from core.credential_store import get_credential, store_credential
 from ui.components import C, F, add_grid_input, create_action_btn, add_section_divider
@@ -19,9 +19,9 @@ class AccountsView(ctk.CTkFrame):
         title_box = ctk.CTkFrame(title_row, fg_color="transparent")
         title_box.pack(side='left', anchor='w')
         
-        lbl_title = ctk.CTkLabel(title_box, text="Credentials & SMTP", font=F["h1"], text_color=C["ink"], anchor="w")
+        lbl_title = ctk.CTkLabel(title_box, text="Connections", font=F["h1"], text_color=C["ink"], anchor="w")
         lbl_title.pack(anchor='w')
-        lbl_sub = ctk.CTkLabel(title_box, text="Encrypted credentials storage and SMTP outreach dispatch configuration.", font=F["xs"], text_color=C["ash"], anchor="w")
+        lbl_sub = ctk.CTkLabel(title_box, text="Manage your job board accounts and outgoing email.", font=F["xs"], text_color=C["ash"], anchor="w")
         lbl_sub.pack(anchor='w', pady=(2, 0))
         
         # ── Scrollable Card ──
@@ -103,8 +103,7 @@ class AccountsView(ctk.CTkFrame):
             store_credential("smtp.password", self.smtp_password.get().strip())
             CONFIG["smtp"]["password"] = ""  # Blank out in config
             
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(CONFIG, f, indent=4)
+            save_config()
             messagebox.showinfo("Success", "Account credentials & SMTP server saved securely!")
             log_message("Credentials saved to secure store & SMTP settings saved via Desktop GUI.")
             recalculate_metrics()

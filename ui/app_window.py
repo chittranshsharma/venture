@@ -7,7 +7,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import ttk
 import core.state as state
-from core.config_manager import CONFIG, CONFIG_PATH, get_model_name, get_active_model_display
+from core.config_manager import CONFIG, save_config, get_model_name, get_active_model_display
 from core.db_manager import APPLIED_DB_PATH, recalculate_metrics
 from automation.llm_evaluator import check_live_ai_status
 from automation.radar import get_radar_agent
@@ -25,9 +25,9 @@ from ui.contacts_view import ContactsView
 class AppWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("VENTURE — Autonomous Career Operations")
-        self.geometry("1300x840")
-        self.minsize(1100, 720)
+        self.title("Venture — Career workspace")
+        self.geometry("1440x900")
+        self.minsize(1200, 800)
         self.configure(fg_color=C["canvas"])
 
         self.current_view = "dashboard"
@@ -43,18 +43,18 @@ class AppWindow(ctk.CTk):
 
         # ── Brand Header ──
         logo_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        logo_frame.pack(pady=(22, 10), padx=16, anchor='w', fill='x')
+        logo_frame.pack(pady=(30, 16), padx=22, anchor='w', fill='x')
 
         brand_row = ctk.CTkFrame(logo_frame, fg_color="transparent")
         brand_row.pack(anchor='w')
 
-        logo_icon = ctk.CTkLabel(brand_row, text="◆", font=("Segoe UI", 12, "bold"), text_color=C["accent"])
+        logo_icon = ctk.CTkLabel(brand_row, text="V", font=("Segoe UI", 18, "bold"), text_color=C["primary_on"], fg_color=C["accent"], corner_radius=8, width=34, height=34)
         logo_icon.pack(side='left', padx=(0, 6))
-        logo_text = ctk.CTkLabel(brand_row, text="VENTURE", font=F["logo"], text_color=C["text"])
+        logo_text = ctk.CTkLabel(brand_row, text="Venture", font=F["logo"], text_color=C["text"])
         logo_text.pack(side='left')
 
-        brand_sub = ctk.CTkLabel(logo_frame, text="Autonomous Career Engine", font=F["xs"], text_color=C["tertiary"], anchor="w")
-        brand_sub.pack(anchor='w', padx=(18, 0), pady=(1, 0))
+        brand_sub = ctk.CTkLabel(logo_frame, text="Your career workspace", font=F["xs"], text_color=C["tertiary"], anchor="w")
+        brand_sub.pack(anchor='w', pady=(8, 0))
 
         # Hairline separator
         sep = ctk.CTkFrame(self.sidebar, fg_color=C["border"], height=1, corner_radius=0)
@@ -71,14 +71,12 @@ class AppWindow(ctk.CTk):
                 ('history',     '☰', 'Applications'),
             ]),
             ("INTELLIGENCE", [
-                ('venture_ai',  '✦', 'VENTURE AI'),
-                ('radar',       '◬', 'Radar'),
-                ('contacts',    '📇', 'Recruiters'),
+                ('venture_ai',  '✦', 'Assistant'),
+                ('contacts',    '○', 'Recruiters'),
             ]),
             ("PROFILE", [
                 ('profile',     '◉', 'Profile'),
-                ('resume',      '📄', 'Resume'),
-                ('accounts',    '🔒', 'Credentials'),
+                ('accounts',    '□', 'Credentials'),
             ]),
             ("SYSTEM", [
                 ('settings',    '⚙', 'Settings'),
@@ -95,19 +93,19 @@ class AppWindow(ctk.CTk):
             for name, icon, label in items:
                 btn = ctk.CTkButton(
                     self.sidebar,
-                    text=f"  {icon}   {label}",
+                    text=f"  {label}",
                     anchor="w",
                     font=F["nav"],
                     fg_color="transparent",
                     hover_color=C["card_hover"],
                     text_color=C["secondary"],
                     corner_radius=6,
-                    height=32,
+                    height=40,
                     border_width=0,
                     cursor="hand2",
                     command=lambda n=name: self.show_view(n)
                 )
-                btn.pack(fill='x', padx=10, pady=1)
+                btn.pack(fill='x', padx=14, pady=3)
                 self.nav_btns[name] = btn
 
         # ── Sidebar Bottom Status Pill ──
@@ -129,7 +127,7 @@ class AppWindow(ctk.CTk):
 
         # ── Main Content Container ──
         self.container = ctk.CTkFrame(self, fg_color="transparent")
-        self.container.pack(side='right', fill='both', expand=True, padx=(18, 20), pady=16)
+        self.container.pack(side='right', fill='both', expand=True, padx=28, pady=24)
 
         self.create_top_navbar()
 
@@ -171,14 +169,14 @@ class AppWindow(ctk.CTk):
     def create_top_navbar(self):
         # ── Top Bar Card: Prestigious System Status Bar ──
         self.top_bar = ctk.CTkFrame(
-            self.container, fg_color=C["card"], corner_radius=8,
-            border_width=1, border_color=C["border"], height=52
+            self.container, fg_color="transparent", corner_radius=0,
+            border_width=0, height=44
         )
         self.top_bar.pack(fill='x', pady=(0, 14))
         self.top_bar.pack_propagate(False)
 
         bar_inner = ctk.CTkFrame(self.top_bar, fg_color="transparent")
-        bar_inner.pack(fill='both', expand=True, padx=16)
+        bar_inner.pack(fill='both', expand=True)
 
         # Left: Brand indicator & Live Operational state
         left_hud = ctk.CTkFrame(bar_inner, fg_color="transparent")
@@ -188,8 +186,8 @@ class AppWindow(ctk.CTk):
         self.telemetry_dot.pack(side='left', pady=15)
 
         self.telemetry_status_lbl = ctk.CTkLabel(
-            left_hud, text="VENTURE STANDBY",
-            font=F["mono_sm"], text_color=C["text"], anchor="w"
+            left_hud, text="Standby",
+            font=F["xs"], text_color=C["secondary"], anchor="w"
         )
         self.telemetry_status_lbl.pack(side='left', padx=(4, 12), pady=15)
 
@@ -197,49 +195,36 @@ class AppWindow(ctk.CTk):
         ctk.CTkFrame(left_hud, fg_color=C["border"], width=1).pack(side='left', fill='y', pady=12)
 
         self.telemetry_desc_lbl = ctk.CTkLabel(
-            left_hud, text="Autonomous Career Engine · Multi-Source Pipeline",
+            left_hud, text="Career workspace",
             font=F["xs"], text_color=C["tertiary"]
-        ).pack(side='left', padx=(12, 0), pady=15)
+        )
+        self.telemetry_desc_lbl.pack(side='left', padx=(12, 0), pady=10)
 
         # Right: Technical Telemetry Triad (CORE, RADAR, DATABASE)
         right_hud = ctk.CTkFrame(bar_inner, fg_color="transparent")
         right_hud.pack(side='right', fill='y')
 
         # Version Pill
-        badge = ctk.CTkLabel(
-            right_hud, text="  v3.5  ",
-            fg_color=C["elevated"], text_color=C["secondary"],
-            font=F["xs"], corner_radius=4, height=22
-        )
-        badge.pack(side='right', pady=14, padx=(12, 0))
 
         # DATABASE segment
-        db_f = ctk.CTkFrame(right_hud, fg_color="transparent")
-        db_f.pack(side='right', fill='y', padx=(10, 0))
-        ctk.CTkLabel(db_f, text="●", font=("Arial", 8), text_color=C["green"]).pack(side='left', pady=16)
-        ctk.CTkLabel(db_f, text=" DB:", font=F["xs_b"], text_color=C["tertiary"]).pack(side='left', pady=16)
-        self.ind_db = ctk.CTkLabel(db_f, text=" Synced", font=F["xs"], text_color=C["secondary"])
-        self.ind_db.pack(side='left', pady=16)
 
-        ctk.CTkFrame(right_hud, fg_color=C["border"], width=1).pack(side='right', fill='y', pady=14, padx=8)
 
         # RADAR segment
         radar_f = ctk.CTkFrame(right_hud, fg_color="transparent")
         radar_f.pack(side='right', fill='y', padx=(10, 0))
         self.ind_radar_dot = ctk.CTkLabel(radar_f, text="●", font=("Arial", 8), text_color=C["dim"])
         self.ind_radar_dot.pack(side='left', pady=16)
-        ctk.CTkLabel(radar_f, text=" RADAR:", font=F["xs_b"], text_color=C["tertiary"]).pack(side='left', pady=16)
+        ctk.CTkLabel(radar_f, text=" Radar", font=F["xs"], text_color=C["tertiary"]).pack(side='left', pady=10)
         self.ind_radar_val = ctk.CTkLabel(radar_f, text=" Idle", font=F["xs"], text_color=C["secondary"])
         self.ind_radar_val.pack(side='left', pady=16)
 
-        ctk.CTkFrame(right_hud, fg_color=C["border"], width=1).pack(side='right', fill='y', pady=14, padx=8)
 
         # CORE segment
         core_f = ctk.CTkFrame(right_hud, fg_color="transparent")
         core_f.pack(side='right', fill='y', padx=(10, 0))
         self.ind_core_dot = ctk.CTkLabel(core_f, text="●", font=("Arial", 8), text_color=C["green"])
         self.ind_core_dot.pack(side='left', pady=16)
-        ctk.CTkLabel(core_f, text=" CORE:", font=F["xs_b"], text_color=C["tertiary"]).pack(side='left', pady=16)
+        ctk.CTkLabel(core_f, text=" AI", font=F["xs"], text_color=C["tertiary"]).pack(side='left', pady=10)
         self.ind_core_val = ctk.CTkLabel(core_f, text=" Checking...", font=F["xs"], text_color=C["secondary"], cursor="hand2")
         self.ind_core_val.pack(side='left', pady=16)
         self.ind_core_val.bind("<Button-1>", lambda e: self.show_view('settings'))
@@ -261,6 +246,12 @@ class AppWindow(ctk.CTk):
             for v in self.views.values():
                 v.pack_forget()
             self.views[target_view].pack(fill='both', expand=True)
+            self.telemetry_desc_lbl.configure(text={
+                'dashboard': 'Overview', 'suggestions': 'Opportunities',
+                'approvals': 'Approvals', 'history': 'Applications',
+                'contacts': 'Recruiters', 'settings': 'Settings',
+                'profile': 'Candidate profile', 'accounts': 'Credentials',
+            }.get(target_view, 'Workspace'))
             self.refresh_nav_buttons()
 
             if name == 'venture_ai' and hasattr(self.views['dashboard'], 'chat_input'):
@@ -290,7 +281,7 @@ class AppWindow(ctk.CTk):
             'suggestions': ('◎', 'Opportunities'),
             'approvals':   ('⚑', 'Approvals'),
             'history':     ('☰', 'Applications'),
-            'venture_ai':  ('✦', 'VENTURE AI'),
+            'venture_ai':  ('✦', 'Assistant'),
             'radar':       ('◬', 'Radar'),
             'contacts':    ('📇', 'Recruiters'),
             'profile':     ('◉', 'Profile'),
@@ -304,13 +295,13 @@ class AppWindow(ctk.CTk):
             icon, base_label = nav_labels.get(name, ('•', name.capitalize()))
 
             if name == 'approvals' and doubt_count > 0:
-                text = f"  {icon}   Approvals ({doubt_count})"
-                text_color = C["red"] if not is_active else C["text"]
+                text = f"  Approvals  ·  {doubt_count}"
+                text_color = C["text"] if is_active else C["secondary"]
             elif name == 'suggestions' and sug_count > 0:
-                text = f"  {icon}   Opportunities ({sug_count})"
-                text_color = C["amber"] if not is_active else C["text"]
+                text = f"  Opportunities  ·  {sug_count}"
+                text_color = C["text"] if is_active else C["secondary"]
             else:
-                text = f"  {icon}   {base_label}"
+                text = f"  {base_label}"
                 text_color = C["text"] if is_active else C["secondary"]
 
             if is_active:
@@ -319,7 +310,7 @@ class AppWindow(ctk.CTk):
                     fg_color=C["elevated"],
                     text_color=C["text"],
                     font=F["nav_a"],
-                    border_width=1,
+                    border_width=0,
                     border_color=C["border"]
                 )
             else:
@@ -353,8 +344,7 @@ class AppWindow(ctk.CTk):
                 if "qa_vault" not in CONFIG["candidate"]: CONFIG["candidate"]["qa_vault"] = {}
                 CONFIG["candidate"]["qa_vault"][key] = str(val)
 
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(CONFIG, f, indent=4)
+            save_config()
 
             self.after(10, self.reload_all_views)
         except Exception as e:
@@ -391,17 +381,17 @@ class AppWindow(ctk.CTk):
             self.status_var.set("Agent Paused")
             self.status_dot.configure(text_color=C["amber"])
             self.telemetry_dot.configure(text_color=C["amber"])
-            self.telemetry_status_lbl.configure(text="VENTURE PAUSED")
+            self.telemetry_status_lbl.configure(text="Paused")
         elif state.BOT_RUNNING:
             self.status_var.set("Agent Active")
             self.status_dot.configure(text_color=C["green"])
             self.telemetry_dot.configure(text_color=C["green"])
-            self.telemetry_status_lbl.configure(text="VENTURE ACTIVE")
+            self.telemetry_status_lbl.configure(text="Agent running")
         else:
             self.status_var.set("Agent Idle")
             self.status_dot.configure(text_color=C["dim"])
             self.telemetry_dot.configure(text_color=C["dim"])
-            self.telemetry_status_lbl.configure(text="VENTURE STANDBY")
+            self.telemetry_status_lbl.configure(text="Standby")
 
         self.refresh_nav_buttons()
         self.after(1000, self.update_gui_loop)

@@ -2,9 +2,10 @@ import os
 import json
 import urllib.parse
 import copy
+import tempfile
 from core.credential_store import get_credential, migrate_plaintext_credentials
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.abspath(os.environ.get("VENTURE_DATA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 SCREENSHOTS_DIR = os.path.join(BASE_DIR, "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -45,8 +46,8 @@ DEFAULT_CONFIG = {
             "current_ctc": "0",
             "expected_ctc": "3",
             "expected_stipend": "15000",
-            "work_authorization": "Yes",
-            "require_sponsorship": "No",
+            "work_authorization": "",
+            "require_sponsorship": "",
             "willing_to_relocate": "Yes",
             "work_preference": "Remote",
             "gender": "Decline to state",
@@ -128,20 +129,27 @@ def load_config():
                         for k, v in DEFAULT_CONFIG[category].items():
                             if k not in CONFIG[category]:
                                 CONFIG[category][k] = v
-        except Exception:
-            CONFIG = copy.deepcopy(DEFAULT_CONFIG)
-            save_config()
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError("Could not read config.json. Original file was preserved; repair or restore it before continuing.") from exc
     # Migrate any plaintext credentials to secure storage
     if migrate_plaintext_credentials(CONFIG):
         save_config()  # Save config with blanked-out passwords
     return CONFIG
 
 def save_config():
+    """Replace the configuration only after the complete JSON is flushed to disk."""
+    temporary_path = None
     try:
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(CONFIG, f, indent=4)
-    except Exception as e:
-        print(f"Error saving config: {e}")
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=BASE_DIR,
+                                         prefix='.config-', suffix='.tmp', delete=False) as stream:
+            temporary_path = stream.name
+            json.dump(CONFIG, stream, indent=4, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, CONFIG_PATH)
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
+            os.unlink(temporary_path)
 
 def get_model_name():
     """Get the configured Ollama model name, with fallback."""

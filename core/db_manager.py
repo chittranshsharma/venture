@@ -7,6 +7,8 @@ import threading
 import re
 import hashlib
 import random
+import uuid
+from contextlib import closing
 from datetime import datetime, timedelta
 import core.state as state
 
@@ -77,7 +79,7 @@ APPLIED_STATUSES = (
 )
 
 def suppression_verdict(conn=None, company: str = None, title: str = None, jd_text: str = None,
-                        window_days: int = 90, exclude_url: str = None) -> str:
+                        window_days: int = 90, exclude_url: str = None, log_verdict: bool = True) -> str:
     """
     Determine dedup suppression verdict: 'suppress' | 'flag' | 'pass'.
     - suppress: High confidence duplicate (similarity >= 0.85).
@@ -97,16 +99,16 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
         try:
             with _get_connection() as direct_conn:
                 return suppression_verdict(direct_conn, c, t, jd, window_days=w_days, exclude_url=ex_url)
-        except Exception:
-            return "pass"
+        except Exception as exc:
+            raise RuntimeError("Duplicate checks are unavailable; execution is blocked.") from exc
 
     if conn is None:
         try:
             with _get_connection() as direct_conn:
                 return suppression_verdict(direct_conn, company or "", title or "", jd_text or "",
                                            window_days=window_days, exclude_url=exclude_url)
-        except Exception:
-            return "pass"
+        except Exception as exc:
+            raise RuntimeError("Duplicate checks are unavailable; execution is blocked.") from exc
 
     key = compute_dedup_key(company or "", title or "")
     cutoff = (datetime.now() - timedelta(days=window_days)).isoformat()
@@ -140,14 +142,16 @@ def suppression_verdict(conn=None, company: str = None, title: str = None, jd_te
             else:
                 s = jd_similarity(jd_text or "", prior)
             if s >= 0.85:
-                log_message(f"[DEDUP SUPPRESS] sim={s:.2f} incoming_url={exclude_url or 'unknown'} prior_url={prior_url} key={key}")
+                if log_verdict:
+                    log_message(f"[DEDUP SUPPRESS] sim={s:.2f} incoming_url={exclude_url or 'unknown'} prior_url={prior_url} key={key}")
                 return "suppress"
             if s >= 0.5:
-                log_message(f"[DEDUP FLAG] sim={s:.2f} incoming_url={exclude_url or 'unknown'} prior_url={prior_url} key={key}")
+                if log_verdict:
+                    log_message(f"[DEDUP FLAG] sim={s:.2f} incoming_url={exclude_url or 'unknown'} prior_url={prior_url} key={key}")
                 verdict = "flag"
         return verdict
-    except Exception:
-        return "pass"
+    except Exception as exc:
+        raise RuntimeError("Duplicate checks are unavailable; execution is blocked.") from exc
 
 def is_suppressed(conn=None, company: str = None, title: str = None, jd_text: str = None,
                   window_days: int = 90, sim: float = 0.85, exclude_url: str = None) -> bool:
@@ -220,13 +224,14 @@ def route(score: int, min_score: int, url: str = "", content_hash: str = "", exp
     return "reject", 0.0
 
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.abspath(os.environ.get("VENTURE_DATA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.makedirs(BASE_DIR, exist_ok=True)
 SQLITE_DB_PATH = os.path.join(BASE_DIR, "venture.db")
 APPLIED_DB_PATH = os.path.join(BASE_DIR, "applied_jobs.csv")
 RECRUITER_DB_PATH = os.path.join(BASE_DIR, "recruiter_contacts.csv")
 LOG_FILE_PATH = os.path.join(BASE_DIR, "bot_logs.txt")
 
-DB_LOCK = threading.Lock()
+DB_LOCK = threading.RLock()
 RECRUITER_CACHE_SET = set()
 APPLIED_URLS_SET = set()
 
@@ -238,9 +243,17 @@ class AppStatus:
     OFFER     = "Offer"
     WITHDRAWN = "Withdrawn"
 
+class _Connection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def _get_connection():
     """Create a thread-safe connection to the SQLite database with WAL mode."""
-    conn = sqlite3.connect(SQLITE_DB_PATH, timeout=30.0)
+    conn = sqlite3.connect(SQLITE_DB_PATH, timeout=30.0, factory=_Connection)
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
@@ -302,6 +315,7 @@ def _init_db_schema():
                 conn.close()
         except Exception as e:
             print(f"Error initializing SQLite database: {e}")
+            raise
 
 
 def _backfill_hashes_locked(conn, force_all: bool = False):
@@ -548,8 +562,32 @@ def _run_schema_migrations_locked(conn):
             conn.execute("PRAGMA user_version = 7")
             conn.commit()
             print("[DB Migration] Schema migrated to version 7 (Canonical location-free dedup_key backfill).")
+        if v < 8:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(applications)")}
+            if "submitted_at" not in cols:
+                conn.execute("ALTER TABLE applications ADD COLUMN submitted_at TEXT")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS submission_attempts (
+                    token TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    dedup_key TEXT NOT NULL,
+                    attempt_day TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    status TEXT NOT NULL CHECK(status IN
+                        ('reserved', 'submitting', 'submitted', 'unverified', 'failed', 'aborted')),
+                    detail TEXT
+                )
+            """)
+            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_active_submission
+                ON submission_attempts(dedup_key) WHERE status IN ('reserved', 'submitting')""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_attempt_day ON submission_attempts(attempt_day, status)")
+            conn.execute("PRAGMA user_version = 8")
+            conn.commit()
+            print("[DB Migration] Schema migrated to version 8 (Submission audit and reservations).")
     except Exception as e:
         print(f"[DB Migration] Error running migrations: {e}")
+        raise
 
 
 def log_evaluation(
@@ -1108,22 +1146,135 @@ def get_outcome_calibration_summary() -> dict:
             return {"error": str(e), "sufficient_data": False, "data_status": "INSUFFICIENT_DATA"}
 
 
+def _daily_submission_count(conn) -> int:
+    placeholders = ",".join("?" for _ in APPLIED_STATUSES)
+    return conn.execute(f"""
+        SELECT COUNT(*) FROM (
+            SELECT url FROM submission_attempts
+              WHERE attempt_day=date('now', 'localtime')
+                AND status IN ('reserved', 'submitting', 'submitted', 'unverified')
+            UNION
+            SELECT url FROM applications
+              WHERE status IN ({placeholders})
+                AND date(COALESCE(submitted_at, applied_at))=date('now', 'localtime')
+        )
+    """, APPLIED_STATUSES).fetchone()[0]
+
+
 def get_daily_apply_count() -> int:
-    """Returns the count of jobs submitted/applied today from the applications table."""
-    with DB_LOCK:
-        try:
-            with _get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT COUNT(*) FROM applications
-                    WHERE status IN ('Applied', 'SUBMITTED', 'Manual Approval Apply')
-                      AND date(applied_at) = date('now', 'localtime')
-                """)
-                row = cursor.fetchone()
-                return int(row[0]) if row and row[0] is not None else 0
-        except Exception as e:
-            log_message(f"Error counting daily applied jobs: {e}")
-            return 0
+    """Count today's submitted applications and active reservations; fail closed on DB errors."""
+    with DB_LOCK, _get_connection() as conn:
+        return _daily_submission_count(conn)
+
+
+class SubmissionBlockedError(ValueError):
+    """An application cannot safely acquire a live submission reservation."""
+
+
+def get_application(url: str) -> dict:
+    with DB_LOCK, _get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM applications WHERE url=?", (url,)).fetchone()
+        return dict(row) if row else {}
+
+
+def reserve_submission(url: str, daily_cap: int) -> str:
+    """Atomically claim an approved job and daily slot across threads and app instances."""
+    if isinstance(daily_cap, bool) or not isinstance(daily_cap, int) or daily_cap < 1:
+        raise ValueError("Daily application cap must be a positive integer.")
+    now = datetime.now().isoformat()
+    token = uuid.uuid4().hex
+    with DB_LOCK, _get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT status, dedup_key, company, title, jd_text FROM applications WHERE url=?", (url,)).fetchone()
+        if not row or row[0] not in ("APPROVED", "Approved"):
+            raise SubmissionBlockedError("Job must be approved before live submission.")
+        key = row[1] or compute_dedup_key("", url)
+        if suppression_verdict(conn, row[2], row[3], row[4], exclude_url=url, log_verdict=False) == "suppress":
+            raise SubmissionBlockedError("Another application or rejection now suppresses this role.")
+        if conn.execute("""SELECT 1 FROM submission_attempts WHERE url=?
+                           AND status IN ('submitted', 'unverified')""", (url,)).fetchone():
+            raise SubmissionBlockedError("This URL was already submitted. Verify its outcome before any further action.")
+        if conn.execute("""SELECT 1 FROM submission_attempts
+                           WHERE dedup_key=? AND status IN ('reserved', 'submitting')""", (key,)).fetchone():
+            raise SubmissionBlockedError("This role already has an active submission. Review it before retrying.")
+        if _daily_submission_count(conn) >= daily_cap:
+            raise SubmissionBlockedError(f"Daily application cap ({daily_cap}) reached.")
+        conn.execute("""INSERT INTO submission_attempts
+            (token, url, dedup_key, attempt_day, started_at, status)
+            VALUES (?, ?, ?, date('now', 'localtime'), ?, 'reserved')""", (token, url, key, now))
+        conn.execute("""UPDATE applications SET status='EXECUTING', checkpoint='detecting_adapter',
+                        updated_at=? WHERE url=?""", (now, url))
+    return token
+
+
+def mark_submission_started(token: str, daily_cap: int = 25):
+    """Persist the uncertain side-effect boundary before any final click."""
+    with DB_LOCK, _get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("""SELECT a.attempt_day, p.status FROM submission_attempts a
+                              JOIN applications p ON p.url=a.url
+                              WHERE a.token=? AND a.status='reserved'""", (token,)).fetchone()
+        if not row or row[1] != "EXECUTING":
+            raise SubmissionBlockedError("Application is no longer reserved for execution.")
+        today = conn.execute("SELECT date('now', 'localtime')").fetchone()[0]
+        if _daily_submission_count(conn) - int(row[0] == today) >= daily_cap:
+            raise SubmissionBlockedError("Daily application cap reached before final submission.")
+        cursor = conn.execute("""UPDATE submission_attempts SET status='submitting', attempt_day=date('now', 'localtime')
+                                 WHERE token=? AND status='reserved'""", (token,))
+        if cursor.rowcount != 1:
+            raise SubmissionBlockedError("Submission reservation is no longer active.")
+        conn.execute("""UPDATE applications SET checkpoint='submitting', updated_at=?
+                        WHERE url=(SELECT url FROM submission_attempts WHERE token=?)""",
+                     (datetime.now().isoformat(), token))
+
+
+def finish_submission(token: str, status: str, detail: str = ""):
+    """Finalize attempt and application together; never downgrade an uncertain click to retryable."""
+    states = {
+        "submitted": ("SUBMITTED", "submitted", "applied"),
+        "unverified": ("SUBMITTED_UNVERIFIED", "submitted_unverified", "unverified"),
+        "failed": ("RETRYABLE", "validation_failed", "discovered"),
+        "aborted": ("FIELDS_FILLED", "submit_aborted_by_human", "discovered"),
+    }
+    if status not in states:
+        raise ValueError("Invalid submission result.")
+    now = datetime.now().isoformat()
+    with DB_LOCK, _get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT url, status FROM submission_attempts WHERE token=?", (token,)).fetchone()
+        if not row or row[1] not in ("reserved", "submitting"):
+            raise SubmissionBlockedError("Submission attempt has already finished.")
+        if row[1] == "submitting" and status in ("failed", "aborted"):
+            status = "unverified"
+        app_state, checkpoint, outcome = states[status]
+        conn.execute("""UPDATE submission_attempts SET status=?, finished_at=?, detail=? WHERE token=?""",
+                     (status, now, detail, token))
+        conn.execute("""UPDATE applications SET status=?, checkpoint=?, reason=?, outcome_stage=?,
+                        updated_at=?, submitted_at=CASE WHEN ? IN ('submitted', 'unverified')
+                            THEN ? ELSE submitted_at END WHERE url=?""",
+                     (app_state, checkpoint, detail, outcome, now, status, now, row[0]))
+
+
+def get_submission_attempts(url: str = None) -> list:
+    """Read the submission audit trail, including interrupted active reservations."""
+    with DB_LOCK, _get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""SELECT * FROM submission_attempts WHERE (? IS NULL OR url=?)
+                               ORDER BY started_at DESC LIMIT 200""", (url, url)).fetchall()
+        return [dict(row) for row in rows]
+
+
+def backup_database(destination: str):
+    """Create a consistent SQLite backup, including WAL data, without overwriting an existing file."""
+    target = os.path.abspath(destination)
+    if target == os.path.abspath(SQLITE_DB_PATH):
+        raise ValueError("Backup destination cannot be the live database.")
+    # Exclusive creation protects existing backups; SQLite's backup API includes uncheckpointed WAL data.
+    with open(target, "xb"):
+        pass
+    with DB_LOCK, _get_connection() as source, closing(sqlite3.connect(target)) as backup:
+        source.backup(backup)
 
 
 def update_job_status_in_csv(url_key, old_status, new_status, new_detail=""):
@@ -1360,7 +1511,9 @@ def get_pending_approvals():
                            rag_score, seniority, skill_overlap, eval_model, prompt_version,
                            jd_text, features_json, decision_reason, outcome_stage, content_hash, dedup_key
                     FROM applications 
-                    WHERE status IN ('Approval Needed', 'Qualified') AND (approval_label IS NULL OR approval_label = '')
+                    WHERE (status IN ('Approval Needed', 'Qualified', 'READY_FOR_APPROVAL')
+                           AND (approval_label IS NULL OR approval_label = ''))
+                       OR status IN ('RETRYABLE', 'FIELDS_FILLED', 'APPROVED', 'Approved')
                     ORDER BY score DESC, id DESC
                 """)
                 for row in cursor.fetchall():
