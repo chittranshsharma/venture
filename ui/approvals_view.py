@@ -3,7 +3,7 @@ from concurrent.futures import Future
 import webbrowser
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox
 import core.state as state
 from core.db_manager import (
     save_to_db, recalculate_metrics, update_job_status_in_csv,
@@ -170,11 +170,17 @@ class ApprovalsView(ctk.CTkFrame):
             border_width=1, border_color=C["hairline_strong"]
         )
         d_box.grid(row=1, column=0, sticky='nsew', pady=(3, 0))
-        self.appr_desc = scrolledtext.ScrolledText(
+        self.appr_desc = tk.Text(
             d_box, bg=C["deep"], fg=C["text"],
-            font=F["sm"], wrap='word', bd=0, highlightthickness=0
+            font=F["sm"], wrap='word', bd=0, highlightthickness=0,
+            width=1, height=1, padx=8, pady=8
         )
-        self.appr_desc.pack(fill='both', expand=True, padx=8, pady=8)
+        desc_scroll = ctk.CTkScrollbar(d_box, command=self.appr_desc.yview,
+                                       fg_color=C["deep"], button_color=C["elevated"],
+                                       button_hover_color=C["hairline_strong"])
+        desc_scroll.pack(side='right', fill='y')
+        self.appr_desc.configure(yscrollcommand=desc_scroll.set)
+        self.appr_desc.pack(side='left', fill='both', expand=True)
 
         # Row 5: Action Buttons (Review / Approve / Skip)
         btn_row = ctk.CTkFrame(right_card, fg_color="transparent")

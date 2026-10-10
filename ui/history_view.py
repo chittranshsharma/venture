@@ -84,6 +84,19 @@ class HistoryView(ctk.CTkFrame):
         self.tree.pack(side='left', fill='both', expand=True, padx=12, pady=12)
         scrollbar.pack(side='right', fill='y', pady=12, padx=(0, 6))
 
+        self.empty_state = ctk.CTkFrame(card, fg_color=C["card"], corner_radius=12,
+                                        border_width=1, border_color=C["border"])
+        empty_content = ctk.CTkFrame(self.empty_state, fg_color="transparent")
+        empty_content.place(relx=.5, rely=.42, anchor='center')
+        ctk.CTkLabel(empty_content, text="↗", font=("Segoe UI", 38, "bold"),
+                     text_color=C["accent"]).pack(pady=(0, 8))
+        ctk.CTkLabel(empty_content, text="Your pipeline starts here", font=F["h1"],
+                     text_color=C["text"]).pack()
+        ctk.CTkLabel(empty_content, text="Applications will appear as you discover and submit roles.",
+                     font=F["sm"], text_color=C["secondary"]).pack(pady=(6, 20))
+        create_action_btn(empty_content, "Explore roles", lambda: self.controller.show_view('suggestions'),
+                          "primary", "normal").pack()
+
         # ── Right-Click Context Menu (Editorial Dark Surface) ──
         self.context_menu = tk.Menu(
             self.tree, 
@@ -157,6 +170,10 @@ class HistoryView(ctk.CTkFrame):
             self.tree.delete(item)
         try:
             records = get_applications_history()
+            if records:
+                self.empty_state.place_forget()
+            else:
+                self.empty_state.place(relx=0, rely=0, relwidth=1, relheight=1)
             for rec in records:
                 url = rec.get("url", "")
                 status = rec.get("status", "Applied")

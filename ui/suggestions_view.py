@@ -6,7 +6,7 @@ import webbrowser
 import threading
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox
 import core.state as state
 from core.config_manager import CONFIG
 from core.db_manager import (
@@ -21,7 +21,7 @@ from ui.components import C, F, create_action_btn
 
 class SuggestionsView(ctk.CTkFrame):
     """
-    VENTURE Opportunities Engine — Linear / Raycast aesthetic.
+    VENTURE opportunities screen.
     Features:
     - Search & filter bar: [ All ] [ High Fit ] [ Remote ] [ New ]
     - Rich opportunity cards with semantic match scores, skill tags, and match ratios
@@ -52,7 +52,7 @@ class SuggestionsView(ctk.CTkFrame):
 
         lbl_sub = ctk.CTkLabel(
             title_box,
-            text="A considered shortlist for your next move.",
+            text="Discover roles that fit, then inspect the evidence behind each match.",
             font=F["xs"], text_color=C["tertiary"], anchor="w"
         )
         lbl_sub.pack(anchor='w', pady=(2, 0))
@@ -60,8 +60,8 @@ class SuggestionsView(ctk.CTkFrame):
         # Right: Total found badge
         self.badge_found = ctk.CTkLabel(
             header_row, text="  0 FOUND  ",
-            fg_color=C["elevated"], text_color=C["secondary"],
-            font=F["mono_sm"], corner_radius=4, height=26
+            fg_color=C["elevated"], text_color=C["accent"],
+            font=F["mono_sm"], corner_radius=8, height=30
         )
         self.badge_found.pack(side='right', anchor='e', pady=4)
 
@@ -71,13 +71,14 @@ class SuggestionsView(ctk.CTkFrame):
 
         # Search Entry
         search_entry = ctk.CTkEntry(
-            toolbar, textvariable=self.search_var,
+            toolbar,
             placeholder_text="Search opportunities...",
             fg_color=C["input"], border_color=C["border"],
-            text_color=C["text"], font=F["xs"],
+            text_color=C["text"], placeholder_text_color=C["tertiary"], font=F["xs"],
             width=280, height=38, corner_radius=8, border_width=1
         )
         search_entry.pack(side='left', padx=(0, 10))
+        search_entry.bind("<KeyRelease>", lambda event: self.search_var.set(search_entry.get()))
         self.search_var.trace_add("write", lambda *args: self.apply_filters())
 
         # Filter Chips
@@ -87,7 +88,7 @@ class SuggestionsView(ctk.CTkFrame):
             btn = ctk.CTkButton(
                 toolbar, text=f_name,
                 font=F["xs"], height=34, width=76,
-                corner_radius=4, border_width=1, cursor="hand2",
+                corner_radius=8, border_width=1, cursor="hand2",
                 command=lambda fn=f_name: self.set_filter(fn)
             )
             btn.pack(side='left', padx=(0, 6))
@@ -111,13 +112,16 @@ class SuggestionsView(ctk.CTkFrame):
         left_container.grid(row=0, column=0, sticky='nsew', padx=(0, 8), pady=0)
 
         self.cards_scroll = ctk.CTkScrollableFrame(
-            left_container, fg_color="transparent"
+            left_container, fg_color="transparent",
+            scrollbar_fg_color=C["canvas"],
+            scrollbar_button_color=C["elevated"],
+            scrollbar_button_hover_color=C["hairline_strong"]
         )
         self.cards_scroll.pack(fill='both', expand=True)
 
         # Right: Opportunity Inspection Detail Panel
         self.right_panel = ctk.CTkFrame(
-            split_frame, fg_color=C["card"], corner_radius=8,
+            split_frame, fg_color=C["card"], corner_radius=12,
             border_width=1, border_color=C["border"]
         )
         self.right_panel.grid(row=0, column=1, sticky='nsew', padx=(8, 0), pady=0)
@@ -200,12 +204,18 @@ class SuggestionsView(ctk.CTkFrame):
             w.destroy()
 
         if not self.filtered_jobs:
-            empty_box = ctk.CTkFrame(self.cards_scroll, fg_color="transparent")
-            empty_box.pack(fill='both', expand=True, pady=40)
-            ctk.CTkLabel(
-                empty_box, text="No opportunities matching the current filter.",
-                font=F["sm"], text_color=C["tertiary"]
-            ).pack()
+            empty_box = ctk.CTkFrame(self.cards_scroll, fg_color=C["card"],
+                                     corner_radius=12, border_width=1, border_color=C["border"])
+            empty_box.pack(fill='x', padx=4, pady=10)
+            ctk.CTkLabel(empty_box, text="◎", font=("Segoe UI", 30),
+                         text_color=C["accent"]).pack(anchor='w', padx=24, pady=(22, 4))
+            ctk.CTkLabel(empty_box, text="No roles to show yet", font=F["h2"],
+                         text_color=C["text"]).pack(anchor='w', padx=24)
+            ctk.CTkLabel(empty_box, text="Try another filter, or start the agent to discover new opportunities.",
+                         font=F["sm"], text_color=C["secondary"],
+                         wraplength=420, justify='left').pack(anchor='w', padx=24, pady=(6, 18))
+            create_action_btn(empty_box, "Open dashboard", lambda: self.controller.show_view('dashboard'),
+                              "primary", "small").pack(anchor='w', padx=24, pady=(0, 24))
             return
 
         for job in self.filtered_jobs:
@@ -299,17 +309,20 @@ class SuggestionsView(ctk.CTkFrame):
             w.destroy()
 
         empty_box = ctk.CTkFrame(self.right_panel, fg_color="transparent")
-        empty_box.pack(fill='both', expand=True, padx=20, pady=40)
+        empty_box.pack(fill='both', expand=True, padx=28, pady=40)
 
         ctk.CTkLabel(
-            empty_box, text="SELECT AN OPPORTUNITY",
-            font=F["xs_b"], text_color=C["tertiary"]
-        ).pack(pady=(60, 6))
+            empty_box, text="✦",
+            font=("Segoe UI", 34), text_color=C["purple"]
+        ).pack(pady=(52, 12))
+
+        ctk.CTkLabel(empty_box, text="A closer look at every role", font=F["h2"],
+                     text_color=C["text"]).pack(pady=(0, 6))
 
         ctk.CTkLabel(
             empty_box,
-            text="Choose a role to review its fit\nand plan your next step.",
-            font=F["xs"], text_color=C["secondary"], justify="center"
+            text="Select an opportunity to see its fit, evidence, and next steps.",
+            font=F["sm"], text_color=C["secondary"], justify="center", wraplength=350
         ).pack()
 
     def _render_active_detail_panel(self, job):
@@ -518,11 +531,19 @@ class SuggestionsView(ctk.CTkFrame):
         lbl_head = ctk.CTkLabel(inner, text=f"TAILORED OUTREACH — {company.upper()}", font=F["xs_b"], text_color=C["secondary"], anchor="w")
         lbl_head.pack(fill='x', padx=14, pady=(12, 6))
 
-        txt = scrolledtext.ScrolledText(
-            inner, bg=C["deep"], fg=C["text"], insertbackground="white",
-            font=F["sm"], wrap='word', bd=0, highlightthickness=0
+        txt_frame = ctk.CTkFrame(inner, fg_color=C["deep"], corner_radius=8)
+        txt_frame.pack(fill='both', expand=True, padx=14, pady=6)
+        txt = tk.Text(
+            txt_frame, bg=C["deep"], fg=C["text"], insertbackground=C["text"],
+            font=F["sm"], wrap='word', bd=0, highlightthickness=0,
+            width=1, height=1, padx=8, pady=8
         )
-        txt.pack(fill='both', expand=True, padx=14, pady=6)
+        txt_scroll = ctk.CTkScrollbar(txt_frame, command=txt.yview,
+                                      fg_color=C["deep"], button_color=C["elevated"],
+                                      button_hover_color=C["hairline_strong"])
+        txt_scroll.pack(side='right', fill='y')
+        txt.configure(yscrollcommand=txt_scroll.set)
+        txt.pack(side='left', fill='both', expand=True)
         txt.insert('end', "Generating tailored cover letter via Qwen...\n")
 
         btn_box = ctk.CTkFrame(inner, fg_color="transparent")

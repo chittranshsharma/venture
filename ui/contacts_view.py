@@ -5,7 +5,7 @@ import webbrowser
 import threading
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox
 from core.config_manager import CONFIG
 from core.db_manager import load_recruiter_contacts, log_message
 from core.resume_parser import extract_resume_text
@@ -143,12 +143,18 @@ class ContactsView(ctk.CTkFrame):
         )
         draft_inner.pack(fill='x', padx=14, pady=(0, 14))
         
-        self.draft_preview = scrolledtext.ScrolledText(
+        self.draft_preview = tk.Text(
             draft_inner,
             bg=C["deep"], fg=C["text"],
-            font=F["sm"], wrap='word', bd=0, height=9, highlightthickness=0
+            font=F["sm"], wrap='word', bd=0, height=9, width=1,
+            highlightthickness=0, padx=8, pady=8
         )
-        self.draft_preview.pack(fill='both', expand=True, padx=8, pady=8)
+        draft_scroll = ctk.CTkScrollbar(draft_inner, command=self.draft_preview.yview,
+                                        fg_color=C["deep"], button_color=C["elevated"],
+                                        button_hover_color=C["hairline_strong"])
+        draft_scroll.pack(side='right', fill='y')
+        self.draft_preview.configure(yscrollcommand=draft_scroll.set)
+        self.draft_preview.pack(side='left', fill='both', expand=True)
         
         self.selected_contact = None
         self.load_contacts_table()
